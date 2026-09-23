@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -48,6 +50,104 @@ const detailLines = 3
 // prefetched. Stats are expensive (a full per-video extract), so fetching the
 // next few means scrolling into a neighbour usually finds them cached.
 const detailLookahead = 3
+
+// historyCap bounds how many searches are recalled/persisted.
+const historyCap = 100
+
+// historyFilePath returns where past queries are stored; overridable in tests.
+var historyFilePath = func() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "ytplay", "history")
+}
+
+func loadHistory(path string) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	var out []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		if q := strings.TrimSpace(sc.Text()); q != "" {
+			out = append(out, q)
+		}
+	}
+	return out
+}
+
+func saveHistory(path string, queries []string) error {
+	if path == "" || len(queries) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w := bufio.NewWriter(f)
+	for _, q := range queries {
+		fmt.Fprintln(w, q)
+	}
+	return w.Flush()
+}
+
+// historyPrev steps toward older queries, remembering the typed text so
+// Ctrl+N can return to it.
+func (m model) historyPrev() model {
+	if len(m.history) == 0 {
+		return m
+	}
+	if m.histIdx == -1 {
+		m.pending = m.input.Value()
+		m.histIdx = len(m.history) - 1
+	} else if m.histIdx > 0 {
+		m.histIdx--
+	}
+	m.input.SetValue(m.history[m.histIdx])
+	m.input.CursorEnd()
+	return m
+}
+
+// historyNext steps toward newer queries and back to the typed text.
+func (m model) historyNext() model {
+	if m.histIdx == -1 {
+		return m
+	}
+	if m.histIdx < len(m.history)-1 {
+		m.histIdx++
+		m.input.SetValue(m.history[m.histIdx])
+	} else {
+		m.histIdx = -1
+		m.input.SetValue(m.pending)
+	}
+	m.input.CursorEnd()
+	return m
+}
+
+// rememberQuery records a completed search in the persisted history.
+func (m model) rememberQuery(q string) model {
+	if q == "" {
+		return m
+	}
+	for _, x := range m.history {
+		if x == q {
+			return m
+		}
+	}
+	m.history = append(m.history, q)
+	if len(m.history) > historyCap {
+		m.history = m.history[len(m.history)-historyCap:]
+	}
+	_ = saveHistory(historyFilePath(), m.history)
+	return m
+}
 
 // ---- video ---------------------------------------------------------------
 
@@ -437,8 +537,11 @@ type model struct {
 	thumbBusy    map[string]bool
 	details      map[string]videoDetail
 	detailBusy   map[string]bool
-	fetched      int  // how many results have been asked for so far
-	fetchingMore bool // a follow-up page is in flight
+	fetched      int      // how many results have been asked for so far
+	fetchingMore bool     // a follow-up page is in flight
+	history      []string // past queries, oldest first
+	histIdx      int      // -1 = editing fresh text, else index into history
+	pending      string   // typed text saved when entering history navigation
 	errMsg       string
 }
 
@@ -466,6 +569,8 @@ func initialModel(args []string) model {
 		thumbBusy:  make(map[string]bool),
 		details:    make(map[string]videoDetail),
 		detailBusy: make(map[string]bool),
+		history:    loadHistory(historyFilePath()),
+		histIdx:    -1,
 	}
 	if len(args) > 0 {
 		m.query = strings.Join(args, " ")
@@ -554,14 +659,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.Type {
 			case tea.KeyEsc:
 				return m, tea.Quit
+			case tea.KeyCtrlP:
+				return m.historyPrev(), nil
+			case tea.KeyCtrlN:
+				return m.historyNext(), nil
 			case tea.KeyEnter:
 				q := strings.TrimSpace(m.input.Value())
 				if q == "" {
 					return m, nil
 				}
 				m.query = q
+				m = m.rememberQuery(q)
 				m.state = searchingState
 				return m, searchCmd(q, searchResults, false)
+			default:
+				m.histIdx = -1
+				m.pending = ""
 			}
 
 		case searchingState:
@@ -831,17 +944,23 @@ func (m model) viewPrompt() string {
 		Padding(1, 2).
 		Width(46)
 
-	content := strings.Join([]string{
+	content := []string{
 		lipgloss.NewStyle().Bold(true).Foreground(accent).Render("Search YouTube"),
 		"",
 		m.input.View(),
 		"",
 		lipgloss.NewStyle().Foreground(fgDim).Render("Type a query and press enter to play in mpv"),
 		lipgloss.NewStyle().Foreground(fgDim).Render("Ctrl+C / Esc to quit"),
-	}, "\n")
+	}
+	if len(m.history) > 0 {
+		content = append(content,
+			lipgloss.NewStyle().Foreground(fgDim).Render(
+				fmt.Sprintf("Ctrl+P / Ctrl+N to recall past searches (%d)", len(m.history))),
+		)
+	}
 
 	centered := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-		lipgloss.JoinVertical(lipgloss.Center, m.titleLine(), box.Render(content)))
+		lipgloss.JoinVertical(lipgloss.Center, m.titleLine(), box.Render(strings.Join(content, "\n"))))
 	return centered
 }
 
