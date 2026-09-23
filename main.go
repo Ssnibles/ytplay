@@ -1338,10 +1338,13 @@ func (m model) viewPreview(l layout) string {
 	v := m.filtered[m.cursor]
 
 	var body strings.Builder
-	body.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accent).Render(truncate(v.Title, l.rightW-6)))
+	title := truncate(v.Title, l.rightW-6)
+	if dur := v.duration(); dur != "?:??" {
+		title = truncate(v.Title, l.rightW-6-len(dur)-3) + " • " + dur
+	}
+	body.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accent).Render(title))
 	body.WriteString("\n")
-	meta := truncate(v.channel()+"  •  "+v.duration(), l.rightW-6)
-	body.WriteString(lipgloss.NewStyle().Foreground(fgMid).Render(meta))
+	body.WriteString(lipgloss.NewStyle().Foreground(fgMid).Render(truncate(v.channel(), l.rightW-6)))
 	body.WriteString("\n\n")
 
 	key := thumbKey(v.ID, l.cols, l.rows)
