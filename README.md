@@ -2,6 +2,20 @@
 
 TUI YouTube search & play built with [Bubble Tea](https://github.com/charmbracelet/bubbletea). Search YouTube from your terminal, preview the results with inline thumbnails, and play the selected video in mpv.
 
+## Screenshots
+
+<table width="100%">
+  <!-- Top Row: Two images side-by-side -->
+  <tr>
+    <td width="50%"><img src="./Screenshots/Screenshot_2026-09-23_18-19-06.png" width="100%" alt="Top Left Image"></td>
+    <td width="50%"><img src="./Screenshots/Screenshot_2026-09-23_18-19-22.png" width="100%" alt="Top Right Image"></td>
+  </tr>
+  <!-- Bottom Row: One image taking up the full width -->
+  <tr>
+    <td colspan="2" width="100%"><img src="./Screenshots/Screenshot_2026-09-23_18-19-28.png" width="100%" alt="Bottom Full Image"></td>
+  </tr>
+</table>
+
 ## Features
 
 - Two-pane results view: keyboard-scrollable list, plus a preview pane with a rendered thumbnail and channel/video stats
@@ -68,5 +82,4 @@ go test ./...
 nix run .# -- "some query"
 ```
 
-Requires `yt-dlp` (`ytsearch`), `mpv`, and `xdg-open` (for the channel
-shortcut) at runtime.
+Requires `yt-dlp` (`ytsearch`), `mpv`, and `xdg-open` (for the channel shortcut) at runtime.
