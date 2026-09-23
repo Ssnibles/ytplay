@@ -119,7 +119,7 @@ func TestEscFromResultsRunsFreshSearch(t *testing.T) {
 	if md.state != searchingState {
 		t.Fatalf("want searchingState, got %v", md.state)
 	}
-	m = update(m, searchMsg{videos: []video{{ID: "a1", Title: "One"}}, gen: md.searchGen})
+	m = update(m, searchMsg{videos: []video{{ID: "a1", Title: "One"}}})
 	m = update(m, tea.KeyMsg{Type: tea.KeyEsc})
 	m2 := m.(model)
 	if m2.state != promptState {
@@ -741,87 +741,6 @@ func TestRememberQueryDedupes(t *testing.T) {
 	}
 	if m.history[1] != "dogs" {
 		t.Fatalf("new query should append, got %v", m.history)
-	}
-}
-
-func TestDebounceFiresLiveSearch(t *testing.T) {
-	m := tea.Model(initialModel(nil))
-	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = update(m, keyRunes("cats"))
-	md := m.(model)
-	// typing bumps the generation and arms a debounce tick
-	if md.searchGen == 0 {
-		t.Fatal("typing should bump the search generation")
-	}
-	gen := md.searchGen
-	// simulate the debounce tick firing for this generation
-	mm, cmd := m.Update(debounceMsg{gen: gen, query: "cats"})
-	if cmd == nil {
-		t.Fatal("debounce should fire a live search command")
-	}
-	md = mm.(model)
-	if md.liveBusy != true {
-		t.Fatal("a fired live search should set liveBusy")
-	}
-}
-
-func TestStaleDebounceIgnored(t *testing.T) {
-	m := tea.Model(initialModel(nil))
-	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = update(m, keyRunes("cats"))
-	md := m.(model)
-	staleGen := md.searchGen
-	// more typing supersedes that generation
-	m = update(m, keyRunes("s"))
-	md = m.(model)
-	mm, cmd := m.Update(debounceMsg{gen: staleGen, query: "cats"})
-	if cmd != nil {
-		t.Fatal("a stale debounce tick should not fire a search")
-	}
-	_ = mm
-}
-
-func TestStaleSearchResultDropped(t *testing.T) {
-	m := tea.Model(initialModel(nil))
-	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = update(m, keyRunes("cats"))
-	gen := (m.(model)).searchGen
-	m = update(m, keyRunes("s"))
-	// a result for the OLD query/gen arrives late — must be ignored
-	m = update(m, searchMsg{videos: []video{{ID: "a1", Title: "Old"}}, gen: gen})
-	md := m.(model)
-	if len(md.filtered) != 0 {
-		t.Fatalf("stale search results should be dropped, got %d", len(md.filtered))
-	}
-}
-
-func TestLiveFailureStaysOnPrompt(t *testing.T) {
-	m := tea.Model(initialModel(nil))
-	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = update(m, keyRunes("cats"))
-	gen := (m.(model)).searchGen
-	m = update(m, searchMsg{err: errTest, gen: gen, live: true})
-	md := m.(model)
-	if md.state != promptState {
-		t.Fatalf("live search failure should stay on the prompt, got %v", md.state)
-	}
-	if md.errMsg == "" {
-		t.Fatal("live search failure should surface the error")
-	}
-}
-
-func TestLiveResultSwitchesToResults(t *testing.T) {
-	m := tea.Model(initialModel(nil))
-	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = update(m, keyRunes("cats"))
-	gen := (m.(model)).searchGen
-	m = update(m, searchMsg{videos: []video{{ID: "a1", Title: "One"}}, gen: gen, live: true})
-	md := m.(model)
-	if md.state != resultsState {
-		t.Fatalf("live results should switch to the results view, got %v", md.state)
-	}
-	if md.liveBusy {
-		t.Fatal("liveBusy should clear once results arrive")
 	}
 }
 

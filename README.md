@@ -4,7 +4,7 @@ TUI YouTube search & play built with [Bubble Tea](https://github.com/charmbracel
 
 ## Features
 
-- **Live type-ahead search** — results appear as you type (400 ms debounce); `Enter` forces an immediate search
+- **Search on demand** — type a query and press `Enter`; searches only ever fire on Enter, never from typing
 - Two-pane results view: keyboard-scrollable list (j/k, arrows, Tab, PgUp/PgDn) with a right-aligned duration column, plus a preview pane with a rendered thumbnail and channel/video stats (subscribers, channel views, views, likes, upload date)
 - Infinite paging: keep scrolling near the bottom to fetch more results (deduped by ID)
 - `Enter` on a result spawns mpv **detached** — the TUI stays open so you can queue the next video

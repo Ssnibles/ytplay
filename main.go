@@ -41,10 +41,6 @@ var (
 
 const searchResults = 25
 
-// searchDebounce is how long the prompt waits after the last keystroke before
-// firing a type-ahead search.
-const searchDebounce = 400 * time.Millisecond
-
 // pageStep is how many rows PgUp/PgDn move the selection.
 const pageStep = 10
 
@@ -281,20 +277,11 @@ func formatCount(n int64) string {
 // searchMsg delivers one yt-dlp search batch. A "more" batch refetches the
 // query with a larger limit and is merged onto the results already shown, so
 // scrolling can page deeper into the channel the way a web search does.
-// gen tags the search generation so stale results (superseded by a newer
-// fired search) can be dropped; live marks a type-ahead (non-Enter) search.
 type searchMsg struct {
 	videos []video
 	err    error
 	limit  int
 	more   bool
-	gen    int
-	live   bool
-}
-
-type debounceMsg struct {
-	gen   int
-	query string
 }
 
 type thumbMsg struct {
@@ -326,7 +313,7 @@ type openMsg struct {
 // searchCmd fetches results via yt-dlp's ytsearchN: syntax. N is the total
 // count asked for: "more" batches re-ask with a bigger N (yt-dlp pages
 // internally) and the results are deduplicated by ID on merge.
-func searchCmd(query string, limit int, more bool, gen int, live bool) tea.Cmd {
+func searchCmd(query string, limit int, more bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -336,14 +323,14 @@ func searchCmd(query string, limit int, more bool, gen int, live bool) tea.Cmd {
 			"-J", fmt.Sprintf("ytsearch%d:%s", limit, query))
 		out, err := cmd.Output()
 		if err != nil {
-			return searchMsg{err: fmt.Errorf("yt-dlp: %w", err), limit: limit, more: more, gen: gen, live: live}
+			return searchMsg{err: fmt.Errorf("yt-dlp: %w", err), limit: limit, more: more}
 		}
 
 		var res struct {
 			Entries []video `json:"entries"`
 		}
 		if err := json.Unmarshal(out, &res); err != nil {
-			return searchMsg{err: fmt.Errorf("parse: %w", err), limit: limit, more: more, gen: gen, live: live}
+			return searchMsg{err: fmt.Errorf("parse: %w", err), limit: limit, more: more}
 		}
 
 		videos := make([]video, 0, len(res.Entries))
@@ -359,11 +346,11 @@ func searchCmd(query string, limit int, more bool, gen int, live bool) tea.Cmd {
 			// a follow-up page hitting the end comes back empty — that's not
 			// an error, it just means there is nothing more to load.
 			if more {
-				return searchMsg{limit: limit, more: more, gen: gen, live: live}
+				return searchMsg{limit: limit, more: more}
 			}
-			return searchMsg{err: fmt.Errorf("no results"), limit: limit, more: more, gen: gen, live: live}
+			return searchMsg{err: fmt.Errorf("no results"), limit: limit, more: more}
 		}
-		return searchMsg{videos: videos, limit: limit, more: more, gen: gen, live: live}
+		return searchMsg{videos: videos, limit: limit, more: more}
 	}
 }
 
@@ -641,9 +628,6 @@ type model struct {
 	history      []string // past queries, oldest first
 	histIdx      int      // -1 = editing fresh text, else index into history
 	pending      string   // typed text saved when entering history navigation
-	searchGen    int      // increments per fired search; stale results are dropped
-	lastFired    string   // query of the most recently fired search
-	liveBusy     bool     // a type-ahead search is in flight
 	queue        []video  // videos staged for sequential playback
 	status       string
 	errMsg       string
@@ -718,31 +702,13 @@ func computeLayout(winW, winH int) layout {
 	return l
 }
 
-// liveSearchState prepares a debounced type-ahead search for whatever the user
-// typed, returning the new generation (only advanced when a tick is armed).
-// Every keystroke bumps the generation; only the newest surviving tick fires,
-// and it re-checks the text before doing so.
-func (m model) liveSearchState() (int, tea.Cmd) {
-	if m.state != promptState {
-		return m.searchGen, nil
-	}
-	q := strings.TrimSpace(m.input.Value())
-	if q == "" || q == m.lastFired {
-		return m.searchGen, nil
-	}
-	gen := m.searchGen + 1
-	return gen, tea.Tick(searchDebounce, func(_ time.Time) tea.Msg {
-		return debounceMsg{gen: gen, query: q}
-	})
-}
-
 // ---- Update ---------------------------------------------------------------
 
 func (m model) Init() tea.Cmd {
 	// The input is focused on the model the update loop runs (set in
 	// initialModel). Init runs on a copy, so focusing here would be lost.
 	if m.state == searchingState {
-		return searchCmd(m.query, searchResults, false, m.searchGen, false)
+		return searchCmd(m.query, searchResults, false)
 	}
 	return nil
 }
@@ -793,21 +759,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.query = q
 				m = m.rememberQuery(q)
-				m.searchGen++
-				m.liveBusy = false
 				m.state = searchingState
-				return m, searchCmd(q, searchResults, false, m.searchGen, false)
+				return m, searchCmd(q, searchResults, false)
 			default:
 				m.histIdx = -1
 				m.pending = ""
-				// Typing and editing reschedule the type-ahead search; arrow
-				// keys also land here, but the debounce re-checks the query
-				// text, so the extra tick is a harmless no-op.
-				gen, c := m.liveSearchState()
-				if c != nil {
-					m.searchGen = gen
-					cmds = append(cmds, c)
-				}
 			}
 
 		case searchingState:
@@ -823,8 +779,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = promptState
 				m.errMsg = ""
 				m.status = ""
-				m.liveBusy = false
-				m.lastFired = ""
 				return m, nil
 			case tea.KeyEnter:
 				// Launch mpv in the background (Cmd.Start, non-blocking) and keep
@@ -901,26 +855,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// after a merge the user still decides when to scroll on.
 			if m.shouldLoadMore() {
 				m.fetchingMore = true
-				cmds = append(cmds, searchCmd(m.query, m.fetched+searchResults, true, m.searchGen, false))
+				cmds = append(cmds, searchCmd(m.query, m.fetched+searchResults, true))
 			}
 		}
 
 	case searchMsg:
 		m.fetchingMore = false
-		if msg.gen != m.searchGen {
-			// superseded by a newer fired search; drop the stale batch.
-			return m, nil
-		}
-		m.liveBusy = false
 		if msg.err != nil {
 			m.errMsg = msg.err.Error()
 			if !msg.more {
 				m.filtered = nil
-				if msg.live {
-					m.state = promptState
-				} else {
-					m.state = resultsState
-				}
+				m.state = resultsState
 			}
 			return m, nil
 		}
@@ -935,20 +880,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.fetched = msg.limit
 		cmds = append(cmds, m.loadSelection())
-
-	case debounceMsg:
-		if msg.gen != m.searchGen || m.state != promptState {
-			return m, nil
-		}
-		q := strings.TrimSpace(m.input.Value())
-		if q == "" || q != msg.query {
-			return m, nil
-		}
-		m.query = q
-		m.lastFired = q
-		m.liveBusy = true
-		m.errMsg = ""
-		return m, searchCmd(q, searchResults, false, m.searchGen, true)
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -1217,9 +1148,6 @@ func (m model) viewPrompt() string {
 			lipgloss.NewStyle().Foreground(fgDim).Render(
 				fmt.Sprintf("Ctrl+P / Ctrl+N to recall past searches (%d)", len(m.history))),
 		)
-	}
-	if m.liveBusy {
-		content = append(content, lipgloss.NewStyle().Foreground(accent).Render("searching…"))
 	}
 	if m.errMsg != "" {
 		content = append(content, lipgloss.NewStyle().Foreground(red).Render(m.errMsg))
