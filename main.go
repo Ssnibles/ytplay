@@ -52,12 +52,13 @@ const detailLookahead = 3
 // ---- video ---------------------------------------------------------------
 
 type video struct {
-	ID       string   `json:"id"`
-	Title    string   `json:"title"`
-	URL      string   `json:"url"`
-	Channel  string   `json:"channel"`
-	Uploader string   `json:"uploader"`
-	Duration *float64 `json:"duration"`
+	ID        string   `json:"id"`
+	Title     string   `json:"title"`
+	URL       string   `json:"url"`
+	Channel   string   `json:"channel"`
+	Uploader  string   `json:"uploader"`
+	Duration  *float64 `json:"duration"`
+	ChannelID string   `json:"channel_id"`
 }
 
 func (v video) watchURL() string {
@@ -93,10 +94,13 @@ func (v video) duration() string {
 // because YouTube omits them for some videos/channels (hidden subscriber
 // counts, unlisted views, …).
 type videoDetail struct {
-	subs     *int64 // channel subscriber count
-	chViews  *int64 // total views across all the channel's videos
-	views    *int64 // views on this video
-	uploaded string // upload date, YYYYMMDD
+	subs       *int64 // channel subscriber count
+	chViews    *int64 // total views across all the channel's videos
+	views      *int64 // views on this video
+	likes      *int64 // likes on this video
+	uploaded   string // upload date, YYYYMMDD
+	channelURL string // canonical channel URL
+	channelID  string // channel id (fallback when URL is missing)
 }
 
 func (d videoDetail) date() string {
@@ -105,6 +109,18 @@ func (d videoDetail) date() string {
 		return ""
 	}
 	return t.Format("Jan 2, 2006")
+}
+
+// channelLink resolves the canonical channel URL for a video, preferring the
+// full URL the extractor reported and falling back to the channel id.
+func (d videoDetail) channelLink() string {
+	if d.channelURL != "" {
+		return d.channelURL
+	}
+	if d.channelID != "" {
+		return "https://www.youtube.com/channel/" + d.channelID
+	}
+	return ""
 }
 
 // lines renders the stats as up to detailLines rows, combining views and post
@@ -171,6 +187,11 @@ type thumbMsg struct {
 type detailMsg struct {
 	id  string
 	det videoDetail
+	err error
+}
+
+type openMsg struct {
+	url string
 	err error
 }
 
@@ -256,15 +277,21 @@ func detailCmd(v video) tea.Cmd {
 		}
 
 		var d struct {
-			Subs    *int64 `json:"channel_follower_count"`
-			ChViews *int64 `json:"channel_view_count"`
-			Views   *int64 `json:"view_count"`
-			Date    string `json:"upload_date"`
+			Subs       *int64 `json:"channel_follower_count"`
+			ChViews    *int64 `json:"channel_view_count"`
+			Views      *int64 `json:"view_count"`
+			Likes      *int64 `json:"like_count"`
+			Date       string `json:"upload_date"`
+			ChannelURL string `json:"channel_url"`
+			ChannelID  string `json:"channel_id"`
 		}
 		if err := json.Unmarshal(out, &d); err != nil {
 			return detailMsg{v.ID, videoDetail{}, err}
 		}
-		return detailMsg{v.ID, videoDetail{subs: d.Subs, chViews: d.ChViews, views: d.Views, uploaded: d.Date}, nil}
+		return detailMsg{v.ID, videoDetail{
+			subs: d.Subs, chViews: d.ChViews, views: d.Views, likes: d.Likes,
+			uploaded: d.Date, channelURL: d.ChannelURL, channelID: d.ChannelID,
+		}, nil}
 	}
 }
 
@@ -414,6 +441,40 @@ func fetchThumb(v video) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
+// openChannelCmd opens a URL in the system browser (via xdg-open) off the TUI.
+func openChannelCmd(url string) tea.Cmd {
+	return func() tea.Msg {
+		if url == "" {
+			return openMsg{"", fmt.Errorf("no channel available")}
+		}
+		devnull, err := os.Open(os.DevNull)
+		if err != nil {
+			return openMsg{url, err}
+		}
+		defer devnull.Close()
+		cmd := exec.Command("xdg-open", url)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, devnull
+		if err := cmd.Run(); err != nil {
+			return openMsg{url, err}
+		}
+		return openMsg{url, nil}
+	}
+}
+
+// openChannel returns the browser command for the selected video, using the
+// detail lookup for its channel URL when the flat search entry lacks one.
+func (m model) openChannel(v video) tea.Cmd {
+	if v.ChannelID != "" {
+		return openChannelCmd("https://www.youtube.com/channel/" + v.ChannelID)
+	}
+	if d, ok := m.details[v.ID]; ok {
+		if url := d.channelLink(); url != "" {
+			return openChannelCmd(url)
+		}
+	}
+	return openChannelCmd("")
+}
+
 // ---- model -----------------------------------------------------------------
 
 type state int
@@ -439,6 +500,7 @@ type model struct {
 	detailBusy   map[string]bool
 	fetched      int  // how many results have been asked for so far
 	fetchingMore bool // a follow-up page is in flight
+	status       string
 	errMsg       string
 }
 
@@ -576,6 +638,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// back to the search bar for a fresh search
 				m.state = promptState
 				m.errMsg = ""
+				m.status = ""
 				return m, nil
 			case tea.KeyEnter:
 				// Launch mpv in the background (Cmd.Start, non-blocking) and keep
@@ -617,6 +680,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					down = true
 				case "k":
 					up = true
+				case "o":
+					if len(m.filtered) > 0 {
+						if c := m.openChannel(m.filtered[m.cursor]); c != nil {
+							cmds = append(cmds, c)
+						}
+					}
 				}
 			}
 			if down && m.cursor < len(m.filtered)-1 {
@@ -649,6 +718,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.errMsg = ""
+		m.status = ""
 		if msg.more {
 			m.filtered = mergeResults(m.filtered, msg.videos)
 		} else {
@@ -679,6 +749,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.details[msg.id] = msg.det
+
+	case openMsg:
+		if msg.err != nil {
+			m.status = ""
+			m.errMsg = "open: " + msg.err.Error()
+			return m, nil
+		}
+		m.errMsg = ""
+		m.status = "opened " + msg.url
 	}
 
 	return m, tea.Batch(cmds...)
@@ -881,6 +960,9 @@ func (m model) viewResults() string {
 
 	if m.errMsg != "" {
 		out.WriteString("\n" + lipgloss.NewStyle().Foreground(red).Render(m.errMsg))
+	}
+	if m.status != "" {
+		out.WriteString("\n" + lipgloss.NewStyle().Padding(0, 1).Foreground(accent).Render(m.status))
 	}
 	if len(m.filtered) == 0 && m.errMsg == "" {
 		out.WriteString("\n" + lipgloss.NewStyle().Foreground(fgMid).Render("Nothing to show — press Esc to search again"))

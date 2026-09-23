@@ -524,6 +524,54 @@ func TestPreviewShowsDetails(t *testing.T) {
 	}
 }
 
+func TestOpenChannelKeyQueuesCommand(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{{ID: "a1", Title: "One", Channel: "C", ChannelID: "UCabc"}},
+	})
+	mm, cmd := m.Update(keyRunes("o"))
+	if cmd == nil {
+		t.Fatal("pressing o should queue an open command")
+	}
+	_ = mm
+}
+
+func TestOpenMsgSetsStatus(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{{ID: "a1", Title: "One", Channel: "C"}},
+	})
+	m = update(m, openMsg{url: "https://www.youtube.com/channel/UCabc"})
+	md := m.(model)
+	if !strings.Contains(md.status, "UCabc") {
+		t.Fatalf("status should confirm the opened channel, got %q", md.status)
+	}
+}
+
+func TestOpenChannelFailureSetsError(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, openMsg{err: errTest})
+	md := m.(model)
+	if md.errMsg == "" {
+		t.Fatal("expected an error message on browser failure")
+	}
+}
+
+func TestChannelURLFallback(t *testing.T) {
+	if got := (videoDetail{channelID: "UCabc"}).channelLink(); got != "https://www.youtube.com/channel/UCabc" {
+		t.Fatalf("id fallback = %q", got)
+	}
+	if got := (videoDetail{channelURL: "https://youtube.com/@codepoint"}).channelLink(); got != "https://youtube.com/@codepoint" {
+		t.Fatalf("direct url = %q", got)
+	}
+	if got := (videoDetail{}).channelLink(); got != "" {
+		t.Fatalf("empty detail should have no url, got %q", got)
+	}
+}
+
 func kittyImageNum(t *testing.T, s string) string {
 	t.Helper()
 	start := strings.Index(s, "\x1b_G")
