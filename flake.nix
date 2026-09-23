@@ -17,7 +17,7 @@
           version = "0.1.0";
 
           src = ./.;
-          vendorHash = "sha256-RwBa81aIUBWDRpOHkExH57IWo+QgKFGO9xdOb0K7zwU=";
+          vendorHash = "sha256-nqRZcIxrL12PSQwn/Ld8Gm5B1CIh4E9vMHNlA1Q8XcY=";
 
           nativeBuildInputs = [ pkgs.makeWrapper ];
 
