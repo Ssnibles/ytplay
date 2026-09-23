@@ -437,8 +437,10 @@ type model struct {
 	thumbBusy    map[string]bool
 	details      map[string]videoDetail
 	detailBusy   map[string]bool
-	fetched      int  // how many results have been asked for so far
-	fetchingMore bool // a follow-up page is in flight
+	fetched      int     // how many results have been asked for so far
+	fetchingMore bool    // a follow-up page is in flight
+	queue        []video // videos staged for sequential playback
+	status       string
 	errMsg       string
 }
 
@@ -576,6 +578,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// back to the search bar for a fresh search
 				m.state = promptState
 				m.errMsg = ""
+				m.status = ""
 				return m, nil
 			case tea.KeyEnter:
 				// Launch mpv in the background (Cmd.Start, non-blocking) and keep
@@ -584,7 +587,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				v := m.filtered[m.cursor]
-				if err := playInMPV(v); err != nil {
+				if err := playInMPV(v.watchURL()); err != nil {
 					m.errMsg = err.Error()
 					return m, nil
 				}
@@ -617,6 +620,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					down = true
 				case "k":
 					up = true
+				case "a":
+					if len(m.filtered) > 0 {
+						m.queue = append(m.queue, m.filtered[m.cursor])
+						m.errMsg = ""
+						m.status = fmt.Sprintf("queued · %d in queue", len(m.queue))
+					}
+				case "p":
+					m = m.playQueue()
 				}
 			}
 			if down && m.cursor < len(m.filtered)-1 {
@@ -649,6 +660,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.errMsg = ""
+		m.status = ""
 		if msg.more {
 			m.filtered = mergeResults(m.filtered, msg.videos)
 		} else {
@@ -790,9 +802,49 @@ func thumbDims(rightW, midH int) (cols, rows int, ok bool) {
 	return cols, rows, true
 }
 
-func playInMPV(v video) error {
-	cmd := exec.Command("mpv", v.watchURL())
+// queueURLs resolves the playable watch URLs for a staged queue.
+func queueURLs(queue []video) []string {
+	urls := make([]string, len(queue))
+	for i, v := range queue {
+		urls[i] = v.watchURL()
+	}
+	return urls
+}
+
+// playQueue starts mpv with every queued video, playing them in sequence, and
+// clears the queue. The list survives on launch error so it can be retried.
+func (m model) playQueue() model {
+	if len(m.queue) == 0 {
+		m.status = ""
+		m.errMsg = "queue is empty — press a to add videos"
+		return m
+	}
+	urls := queueURLs(m.queue)
+	if err := playInMPV(urls...); err != nil {
+		m.errMsg = err.Error()
+		return m
+	}
+	m.errMsg = ""
+	m.status = fmt.Sprintf("playing %d queued videos", len(urls))
+	m.queue = nil
+	return m
+}
+
+func playInMPV(urls ...string) error {
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		return fmt.Errorf("mpv: %w", err)
+	}
+	defer devnull.Close()
+
+	cmd := exec.Command("mpv", urls...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Detach mpv from the TUI's streams: stdin would otherwise receive the
+	// keystrokes the TUI is listening for, and mpv's own output would print
+	// into the alternate screen and desync the cell-anchored image layout.
+	cmd.Stdin = devnull
+	cmd.Stdout = devnull
+	cmd.Stderr = devnull
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("mpv: %w", err)
 	}
@@ -861,6 +913,7 @@ func (m model) viewResults() string {
 		lipgloss.JoinHorizontal(lipgloss.Left,
 			m.titleLine(),
 			lipgloss.NewStyle().Foreground(fgDim).Render(fmt.Sprintf(" %d results", len(m.filtered))),
+			lipgloss.NewStyle().Foreground(accent).Render(fmt.Sprintf(" · %d queued", len(m.queue))),
 		),
 	)
 
@@ -881,6 +934,9 @@ func (m model) viewResults() string {
 
 	if m.errMsg != "" {
 		out.WriteString("\n" + lipgloss.NewStyle().Foreground(red).Render(m.errMsg))
+	}
+	if m.status != "" {
+		out.WriteString("\n" + lipgloss.NewStyle().Padding(0, 1).Foreground(accent).Render(m.status))
 	}
 	if len(m.filtered) == 0 && m.errMsg == "" {
 		out.WriteString("\n" + lipgloss.NewStyle().Foreground(fgMid).Render("Nothing to show — press Esc to search again"))

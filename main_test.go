@@ -524,6 +524,53 @@ func TestPreviewShowsDetails(t *testing.T) {
 	}
 }
 
+func TestQueueAdd(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{
+			{ID: "a1", Title: "One", URL: "https://youtu.be/a1"},
+			{ID: "a2", Title: "Two", URL: "https://youtu.be/a2"},
+		},
+	})
+	m = update(m, keyRunes("j"))
+	m = update(m, keyRunes("a"))
+	md := m.(model)
+	if len(md.queue) != 1 || md.queue[0].ID != "a2" {
+		t.Fatalf("pressing a should queue the selected video, got %v", md.queue)
+	}
+	if !strings.Contains(md.status, "queued") {
+		t.Fatalf("queue add should set a status, got %q", md.status)
+	}
+	if out := md.viewResults(); !strings.Contains(out, "1 queued") {
+		t.Fatalf("header should show the queue count:\n%s", out)
+	}
+}
+
+func TestQueuePlayEmptyErrors(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{videos: []video{{ID: "a1", Title: "One"}}})
+	m = update(m, keyRunes("p"))
+	md := m.(model)
+	if md.errMsg == "" {
+		t.Fatal("playing an empty queue should error")
+	}
+}
+
+func TestQueueURLs(t *testing.T) {
+	got := queueURLs([]video{{ID: "a1", URL: "https://youtu.be/a1"}, {ID: "a2"}})
+	want := []string{"https://youtu.be/a1", "https://www.youtube.com/watch?v=a2"}
+	if len(got) != len(want) {
+		t.Fatalf("queueURLs = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("queueURLs[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func kittyImageNum(t *testing.T, s string) string {
 	t.Helper()
 	start := strings.Index(s, "\x1b_G")
