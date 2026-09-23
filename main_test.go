@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,6 +13,14 @@ import (
 )
 
 var errTest = errors.New("boom")
+
+// useTempHistory routes past-query persistence to a throwaway file.
+func useTempHistory(t *testing.T) {
+	t.Helper()
+	orig := historyFilePath
+	historyFilePath = func() string { return filepath.Join(t.TempDir(), "history") }
+	t.Cleanup(func() { historyFilePath = orig })
+}
 
 func keyRunes(s string) tea.Msg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
@@ -37,6 +46,7 @@ func TestPromptTyping(t *testing.T) {
 }
 
 func TestEnterStartsWithSearch(t *testing.T) {
+	useTempHistory(t)
 	m := tea.Model(initialModel(nil))
 	m = update(m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = update(m, keyRunes("cats"))
@@ -100,11 +110,16 @@ func TestJKControlsSelection(t *testing.T) {
 }
 
 func TestEscFromResultsRunsFreshSearch(t *testing.T) {
+	useTempHistory(t)
 	m := tea.Model(initialModel(nil))
 	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = update(m, keyRunes("cats"))
 	m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
-	m = update(m, searchMsg{videos: []video{{ID: "a1", Title: "One"}}})
+	md := m.(model)
+	if md.state != searchingState {
+		t.Fatalf("want searchingState, got %v", md.state)
+	}
+	m = update(m, searchMsg{videos: []video{{ID: "a1", Title: "One"}}, gen: md.searchGen})
 	m = update(m, tea.KeyMsg{Type: tea.KeyEsc})
 	m2 := m.(model)
 	if m2.state != promptState {
@@ -457,10 +472,11 @@ func TestVideoDetailLines(t *testing.T) {
 		subs:     i64p(1234567),
 		chViews:  i64p(85000000),
 		views:    i64p(45000),
+		likes:    i64p(1800),
 		uploaded: "20240115",
 	}
 	lines := d.lines(60)
-	want := []string{"1.2M subscribers", "85M total channel views", "45k views · posted Jan 15, 2024"}
+	want := []string{"1.2M subscribers", "85M total channel views", "45k views · 1.8k likes · posted Jan 15, 2024"}
 	if len(lines) != len(want) {
 		t.Fatalf("want %d lines, got %d: %v", len(want), len(lines), lines)
 	}
@@ -497,6 +513,27 @@ func TestDetailCacheIsCapped(t *testing.T) {
 	}
 }
 
+func TestListRow(t *testing.T) {
+	p := func(d float64) *float64 { return &d }
+	cases := []struct {
+		name  string
+		title string
+		dur   *float64
+		width int
+		want  string
+	}{
+		{"duration right-aligned", "some video title here", p(455.0), 20, "some video tit… 7:35"},
+		{"short title padded", "a", p(100), 10, "a     1:40"},
+		{"no duration", "short", nil, 10, "short"},
+		{"narrow leaves no room", "full title here", p(100), 6, "full …"},
+	}
+	for _, c := range cases {
+		v := video{Title: c.title, Duration: c.dur}
+		if got := listRow(v, c.width); got != c.want {
+			t.Errorf("%s: listRow = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
 func TestDetailFetchAndCache(t *testing.T) {
 	m := tea.Model(initialModel(nil))
 	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -542,6 +579,298 @@ func TestPreviewShowsDetails(t *testing.T) {
 	}
 }
 
+func TestCopyKeyQueuesCommand(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{{ID: "a1", Title: "One", URL: "https://youtu.be/a1", Channel: "C"}},
+	})
+	mm, cmd := m.Update(keyRunes("c"))
+	if cmd == nil {
+		t.Fatal("pressing c should queue a copy command")
+	}
+	_ = mm
+}
+
+func TestCopyMsgSetsStatus(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{{ID: "a1", Title: "One", URL: "https://youtu.be/a1", Channel: "C"}},
+	})
+	m = update(m, copyMsg{url: "https://youtu.be/a1"})
+	md := m.(model)
+	if !strings.Contains(md.status, "https://youtu.be/a1") {
+		t.Fatalf("status should confirm the copied URL, got %q", md.status)
+	}
+	if out := md.viewResults(); !strings.Contains(out, "copied") {
+		t.Fatalf("results view should render the status line")
+	}
+}
+
+func TestCopyFailureSetsError(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{{ID: "a1", Title: "One", URL: "https://youtu.be/a1", Channel: "C"}},
+	})
+	m = update(m, copyMsg{url: "x", err: errTest})
+	md := m.(model)
+	if md.status != "" {
+		t.Fatalf("status should be cleared on failure, got %q", md.status)
+	}
+	if md.errMsg == "" {
+		t.Fatal("expected an error message on clipboard failure")
+	}
+}
+
+func TestOpenChannelKeyQueuesCommand(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{{ID: "a1", Title: "One", Channel: "C", ChannelID: "UCabc"}},
+	})
+	mm, cmd := m.Update(keyRunes("o"))
+	if cmd == nil {
+		t.Fatal("pressing o should queue an open command")
+	}
+	_ = mm
+}
+
+func TestOpenMsgSetsStatus(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{{ID: "a1", Title: "One", Channel: "C"}},
+	})
+	m = update(m, openMsg{url: "https://www.youtube.com/channel/UCabc"})
+	md := m.(model)
+	if !strings.Contains(md.status, "UCabc") {
+		t.Fatalf("status should confirm the opened channel, got %q", md.status)
+	}
+}
+
+func TestOpenChannelFailureSetsError(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, openMsg{err: errTest})
+	md := m.(model)
+	if md.errMsg == "" {
+		t.Fatal("expected an error message on browser failure")
+	}
+}
+
+func TestChannelURLFallback(t *testing.T) {
+	if got := (videoDetail{channelID: "UCabc"}).channelLink(); got != "https://www.youtube.com/channel/UCabc" {
+		t.Fatalf("id fallback = %q", got)
+	}
+	if got := (videoDetail{channelURL: "https://youtube.com/@codepoint"}).channelLink(); got != "https://youtube.com/@codepoint" {
+		t.Fatalf("direct url = %q", got)
+	}
+	if got := (videoDetail{}).channelLink(); got != "" {
+		t.Fatalf("empty detail should have no url, got %q", got)
+	}
+}
+
+func TestHistoryRoundtrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hist")
+	if err := saveHistory(path, []string{"aaa", "bbb"}); err != nil {
+		t.Fatal(err)
+	}
+	got := loadHistory(path)
+	if len(got) != 2 || got[0] != "aaa" || got[1] != "bbb" {
+		t.Fatalf("roundtrip = %v", got)
+	}
+}
+
+func TestHistoryNavigation(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	md := m.(model)
+	md.history = []string{"one", "two", "three"}
+	m = tea.Model(md)
+
+	m = update(m, tea.KeyMsg{Type: tea.KeyCtrlP})
+	m = update(m, tea.KeyMsg{Type: tea.KeyCtrlP})
+	md = m.(model)
+	if got := md.input.Value(); got != "two" {
+		t.Fatalf("two Ctrl+P from fresh text should land on 'two', got %q", got)
+	}
+	m = update(m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	md = m.(model)
+	if got := md.input.Value(); got != "three" {
+		t.Fatalf("Ctrl+N should move to newest 'three', got %q", got)
+	}
+	m = update(m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	md = m.(model)
+	if got := md.input.Value(); got != "" {
+		t.Fatalf("Ctrl+N at newest should return to typed text, got %q", got)
+	}
+	if md.histIdx != -1 {
+		t.Fatalf("histIdx should reset to -1, got %d", md.histIdx)
+	}
+}
+
+func TestHistoryNavigationRemembersTypedText(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, keyRunes("mus"))
+	md := m.(model)
+	md.history = []string{"cats"}
+	m = tea.Model(md)
+
+	m = update(m, tea.KeyMsg{Type: tea.KeyCtrlP})
+	md = m.(model)
+	if got := md.input.Value(); got != "cats" {
+		t.Fatalf("Ctrl+P should fill the query, got %q", got)
+	}
+	m = update(m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	md = m.(model)
+	if got := md.input.Value(); got != "mus" {
+		t.Fatalf("Ctrl+N should restore typed text, got %q", got)
+	}
+}
+
+func TestRememberQueryDedupes(t *testing.T) {
+	m := model{histIdx: -1}
+	m = m.rememberQuery("cats")
+	m = m.rememberQuery("dogs")
+	m = m.rememberQuery("cats")
+	if len(m.history) != 2 {
+		t.Fatalf("dedupe failed: %v", m.history)
+	}
+	if m.history[1] != "dogs" {
+		t.Fatalf("new query should append, got %v", m.history)
+	}
+}
+
+func TestDebounceFiresLiveSearch(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, keyRunes("cats"))
+	md := m.(model)
+	// typing bumps the generation and arms a debounce tick
+	if md.searchGen == 0 {
+		t.Fatal("typing should bump the search generation")
+	}
+	gen := md.searchGen
+	// simulate the debounce tick firing for this generation
+	mm, cmd := m.Update(debounceMsg{gen: gen, query: "cats"})
+	if cmd == nil {
+		t.Fatal("debounce should fire a live search command")
+	}
+	md = mm.(model)
+	if md.liveBusy != true {
+		t.Fatal("a fired live search should set liveBusy")
+	}
+}
+
+func TestStaleDebounceIgnored(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, keyRunes("cats"))
+	md := m.(model)
+	staleGen := md.searchGen
+	// more typing supersedes that generation
+	m = update(m, keyRunes("s"))
+	md = m.(model)
+	mm, cmd := m.Update(debounceMsg{gen: staleGen, query: "cats"})
+	if cmd != nil {
+		t.Fatal("a stale debounce tick should not fire a search")
+	}
+	_ = mm
+}
+
+func TestStaleSearchResultDropped(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, keyRunes("cats"))
+	gen := (m.(model)).searchGen
+	m = update(m, keyRunes("s"))
+	// a result for the OLD query/gen arrives late — must be ignored
+	m = update(m, searchMsg{videos: []video{{ID: "a1", Title: "Old"}}, gen: gen})
+	md := m.(model)
+	if len(md.filtered) != 0 {
+		t.Fatalf("stale search results should be dropped, got %d", len(md.filtered))
+	}
+}
+
+func TestLiveFailureStaysOnPrompt(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, keyRunes("cats"))
+	gen := (m.(model)).searchGen
+	m = update(m, searchMsg{err: errTest, gen: gen, live: true})
+	md := m.(model)
+	if md.state != promptState {
+		t.Fatalf("live search failure should stay on the prompt, got %v", md.state)
+	}
+	if md.errMsg == "" {
+		t.Fatal("live search failure should surface the error")
+	}
+}
+
+func TestLiveResultSwitchesToResults(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, keyRunes("cats"))
+	gen := (m.(model)).searchGen
+	m = update(m, searchMsg{videos: []video{{ID: "a1", Title: "One"}}, gen: gen, live: true})
+	md := m.(model)
+	if md.state != resultsState {
+		t.Fatalf("live results should switch to the results view, got %v", md.state)
+	}
+	if md.liveBusy {
+		t.Fatal("liveBusy should clear once results arrive")
+	}
+}
+
+func TestQueueAdd(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{
+			{ID: "a1", Title: "One", URL: "https://youtu.be/a1"},
+			{ID: "a2", Title: "Two", URL: "https://youtu.be/a2"},
+		},
+	})
+	m = update(m, keyRunes("j"))
+	m = update(m, keyRunes("a"))
+	md := m.(model)
+	if len(md.queue) != 1 || md.queue[0].ID != "a2" {
+		t.Fatalf("pressing a should queue the selected video, got %v", md.queue)
+	}
+	if !strings.Contains(md.status, "queued") {
+		t.Fatalf("queue add should set a status, got %q", md.status)
+	}
+	if out := md.viewResults(); !strings.Contains(out, "1 queued") {
+		t.Fatalf("header should show the queue count:\n%s", out)
+	}
+}
+
+func TestQueuePlayEmptyErrors(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{videos: []video{{ID: "a1", Title: "One"}}})
+	m = update(m, keyRunes("p"))
+	md := m.(model)
+	if md.errMsg == "" {
+		t.Fatal("playing an empty queue should error")
+	}
+}
+
+func TestQueueURLs(t *testing.T) {
+	got := queueURLs([]video{{ID: "a1", URL: "https://youtu.be/a1"}, {ID: "a2"}})
+	want := []string{"https://youtu.be/a1", "https://www.youtube.com/watch?v=a2"}
+	if len(got) != len(want) {
+		t.Fatalf("queueURLs = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("queueURLs[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
 func kittyImageNum(t *testing.T, s string) string {
 	t.Helper()
 	start := strings.Index(s, "\x1b_G")

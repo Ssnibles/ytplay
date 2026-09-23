@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,12 +14,15 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/blacktop/go-termimg"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -37,6 +41,10 @@ var (
 
 const searchResults = 25
 
+// searchDebounce is how long the prompt waits after the last keystroke before
+// firing a type-ahead search.
+const searchDebounce = 400 * time.Millisecond
+
 // pageStep is how many rows PgUp/PgDn move the selection.
 const pageStep = 10
 
@@ -52,15 +60,114 @@ const detailLookahead = 3
 const maxDetails = 512
 const maxThumbs = 64
 
+// historyCap bounds how many searches are recalled/persisted.
+const historyCap = 100
+
+// historyFilePath returns where past queries are stored; overridable in tests.
+var historyFilePath = func() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "ytplay", "history")
+}
+
+func loadHistory(path string) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	var out []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		if q := strings.TrimSpace(sc.Text()); q != "" {
+			out = append(out, q)
+		}
+	}
+	return out
+}
+
+func saveHistory(path string, queries []string) error {
+	if path == "" || len(queries) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w := bufio.NewWriter(f)
+	for _, q := range queries {
+		fmt.Fprintln(w, q)
+	}
+	return w.Flush()
+}
+
+// historyPrev steps toward older queries, remembering the typed text so
+// Ctrl+N can return to it.
+func (m model) historyPrev() model {
+	if len(m.history) == 0 {
+		return m
+	}
+	if m.histIdx == -1 {
+		m.pending = m.input.Value()
+		m.histIdx = len(m.history) - 1
+	} else if m.histIdx > 0 {
+		m.histIdx--
+	}
+	m.input.SetValue(m.history[m.histIdx])
+	m.input.CursorEnd()
+	return m
+}
+
+// historyNext steps toward newer queries and back to the typed text.
+func (m model) historyNext() model {
+	if m.histIdx == -1 {
+		return m
+	}
+	if m.histIdx < len(m.history)-1 {
+		m.histIdx++
+		m.input.SetValue(m.history[m.histIdx])
+	} else {
+		m.histIdx = -1
+		m.input.SetValue(m.pending)
+	}
+	m.input.CursorEnd()
+	return m
+}
+
+// rememberQuery records a completed search in the persisted history.
+func (m model) rememberQuery(q string) model {
+	if q == "" {
+		return m
+	}
+	for _, x := range m.history {
+		if x == q {
+			return m
+		}
+	}
+	m.history = append(m.history, q)
+	if len(m.history) > historyCap {
+		m.history = m.history[len(m.history)-historyCap:]
+	}
+	_ = saveHistory(historyFilePath(), m.history)
+	return m
+}
+
 // ---- video ---------------------------------------------------------------
 
 type video struct {
-	ID       string   `json:"id"`
-	Title    string   `json:"title"`
-	URL      string   `json:"url"`
-	Channel  string   `json:"channel"`
-	Uploader string   `json:"uploader"`
-	Duration *float64 `json:"duration"`
+	ID        string   `json:"id"`
+	Title     string   `json:"title"`
+	URL       string   `json:"url"`
+	Channel   string   `json:"channel"`
+	Uploader  string   `json:"uploader"`
+	Duration  *float64 `json:"duration"`
+	ChannelID string   `json:"channel_id"`
 }
 
 func (v video) watchURL() string {
@@ -96,10 +203,13 @@ func (v video) duration() string {
 // because YouTube omits them for some videos/channels (hidden subscriber
 // counts, unlisted views, …).
 type videoDetail struct {
-	subs     *int64 // channel subscriber count
-	chViews  *int64 // total views across all the channel's videos
-	views    *int64 // views on this video
-	uploaded string // upload date, YYYYMMDD
+	subs       *int64 // channel subscriber count
+	chViews    *int64 // total views across all the channel's videos
+	views      *int64 // views on this video
+	likes      *int64 // likes on this video
+	uploaded   string // upload date, YYYYMMDD
+	channelURL string // canonical channel URL
+	channelID  string // channel id (fallback when URL is missing)
 }
 
 func (d videoDetail) date() string {
@@ -108,6 +218,18 @@ func (d videoDetail) date() string {
 		return ""
 	}
 	return t.Format("Jan 2, 2006")
+}
+
+// channelLink resolves the canonical channel URL for a video, preferring the
+// full URL the extractor reported and falling back to the channel id.
+func (d videoDetail) channelLink() string {
+	if d.channelURL != "" {
+		return d.channelURL
+	}
+	if d.channelID != "" {
+		return "https://www.youtube.com/channel/" + d.channelID
+	}
+	return ""
 }
 
 // lines renders the stats as up to detailLines rows, combining views and post
@@ -123,6 +245,9 @@ func (d videoDetail) lines(width int) []string {
 	var detail []string
 	if d.views != nil {
 		detail = append(detail, formatCount(*d.views)+" views")
+	}
+	if d.likes != nil {
+		detail = append(detail, formatCount(*d.likes)+" likes")
 	}
 	if d.date() != "" {
 		detail = append(detail, "posted "+d.date())
@@ -156,11 +281,20 @@ func formatCount(n int64) string {
 // searchMsg delivers one yt-dlp search batch. A "more" batch refetches the
 // query with a larger limit and is merged onto the results already shown, so
 // scrolling can page deeper into the channel the way a web search does.
+// gen tags the search generation so stale results (superseded by a newer
+// fired search) can be dropped; live marks a type-ahead (non-Enter) search.
 type searchMsg struct {
 	videos []video
 	err    error
 	limit  int
 	more   bool
+	gen    int
+	live   bool
+}
+
+type debounceMsg struct {
+	gen   int
+	query string
 }
 
 type thumbMsg struct {
@@ -177,12 +311,22 @@ type detailMsg struct {
 	err error
 }
 
+type copyMsg struct {
+	url string
+	err error
+}
+
+type openMsg struct {
+	url string
+	err error
+}
+
 // ---- commands -------------------------------------------------------------
 
 // searchCmd fetches results via yt-dlp's ytsearchN: syntax. N is the total
 // count asked for: "more" batches re-ask with a bigger N (yt-dlp pages
 // internally) and the results are deduplicated by ID on merge.
-func searchCmd(query string, limit int, more bool) tea.Cmd {
+func searchCmd(query string, limit int, more bool, gen int, live bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -192,14 +336,14 @@ func searchCmd(query string, limit int, more bool) tea.Cmd {
 			"-J", fmt.Sprintf("ytsearch%d:%s", limit, query))
 		out, err := cmd.Output()
 		if err != nil {
-			return searchMsg{nil, fmt.Errorf("yt-dlp: %w", err), limit, more}
+			return searchMsg{err: fmt.Errorf("yt-dlp: %w", err), limit: limit, more: more, gen: gen, live: live}
 		}
 
 		var res struct {
 			Entries []video `json:"entries"`
 		}
 		if err := json.Unmarshal(out, &res); err != nil {
-			return searchMsg{nil, fmt.Errorf("parse: %w", err), limit, more}
+			return searchMsg{err: fmt.Errorf("parse: %w", err), limit: limit, more: more, gen: gen, live: live}
 		}
 
 		videos := make([]video, 0, len(res.Entries))
@@ -215,11 +359,11 @@ func searchCmd(query string, limit int, more bool) tea.Cmd {
 			// a follow-up page hitting the end comes back empty — that's not
 			// an error, it just means there is nothing more to load.
 			if more {
-				return searchMsg{nil, nil, limit, more}
+				return searchMsg{limit: limit, more: more, gen: gen, live: live}
 			}
-			return searchMsg{nil, fmt.Errorf("no results"), limit, more}
+			return searchMsg{err: fmt.Errorf("no results"), limit: limit, more: more, gen: gen, live: live}
 		}
-		return searchMsg{videos, nil, limit, more}
+		return searchMsg{videos: videos, limit: limit, more: more, gen: gen, live: live}
 	}
 }
 
@@ -259,15 +403,21 @@ func detailCmd(v video) tea.Cmd {
 		}
 
 		var d struct {
-			Subs    *int64 `json:"channel_follower_count"`
-			ChViews *int64 `json:"channel_view_count"`
-			Views   *int64 `json:"view_count"`
-			Date    string `json:"upload_date"`
+			Subs       *int64 `json:"channel_follower_count"`
+			ChViews    *int64 `json:"channel_view_count"`
+			Views      *int64 `json:"view_count"`
+			Likes      *int64 `json:"like_count"`
+			Date       string `json:"upload_date"`
+			ChannelURL string `json:"channel_url"`
+			ChannelID  string `json:"channel_id"`
 		}
 		if err := json.Unmarshal(out, &d); err != nil {
 			return detailMsg{v.ID, videoDetail{}, err}
 		}
-		return detailMsg{v.ID, videoDetail{subs: d.Subs, chViews: d.ChViews, views: d.Views, uploaded: d.Date}, nil}
+		return detailMsg{v.ID, videoDetail{
+			subs: d.Subs, chViews: d.ChViews, views: d.Views, likes: d.Likes,
+			uploaded: d.Date, channelURL: d.ChannelURL, channelID: d.ChannelID,
+		}, nil}
 	}
 }
 
@@ -417,6 +567,51 @@ func fetchThumb(v video) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
+// copyURLCmd writes url to the system clipboard (yank) and reports back so the
+// TUI can confirm without blocking on the clipboard service.
+func copyURLCmd(url string) tea.Cmd {
+	return func() tea.Msg {
+		if err := clipboard.WriteAll(url); err != nil {
+			return copyMsg{url, err}
+		}
+		return copyMsg{url, nil}
+	}
+}
+
+// openChannelCmd opens a URL in the system browser (via xdg-open) off the TUI.
+func openChannelCmd(url string) tea.Cmd {
+	return func() tea.Msg {
+		if url == "" {
+			return openMsg{"", fmt.Errorf("no channel available")}
+		}
+		devnull, err := os.Open(os.DevNull)
+		if err != nil {
+			return openMsg{url, err}
+		}
+		defer devnull.Close()
+		cmd := exec.Command("xdg-open", url)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, devnull
+		if err := cmd.Run(); err != nil {
+			return openMsg{url, err}
+		}
+		return openMsg{url, nil}
+	}
+}
+
+// openChannel returns the browser command for the selected video, using the
+// detail lookup for its channel URL when the flat search entry lacks one.
+func (m model) openChannel(v video) tea.Cmd {
+	if v.ChannelID != "" {
+		return openChannelCmd("https://www.youtube.com/channel/" + v.ChannelID)
+	}
+	if d, ok := m.details[v.ID]; ok {
+		if url := d.channelLink(); url != "" {
+			return openChannelCmd(url)
+		}
+	}
+	return openChannelCmd("")
+}
+
 // ---- model -----------------------------------------------------------------
 
 type state int
@@ -429,6 +624,7 @@ const (
 
 type model struct {
 	input        textinput.Model
+	spin         spinner.Model
 	state        state
 	query        string
 	filtered     []video
@@ -440,8 +636,16 @@ type model struct {
 	thumbBusy    map[string]bool
 	details      map[string]videoDetail
 	detailBusy   map[string]bool
-	fetched      int  // how many results have been asked for so far
-	fetchingMore bool // a follow-up page is in flight
+	fetched      int      // how many results have been asked for so far
+	fetchingMore bool     // a follow-up page is in flight
+	history      []string // past queries, oldest first
+	histIdx      int      // -1 = editing fresh text, else index into history
+	pending      string   // typed text saved when entering history navigation
+	searchGen    int      // increments per fired search; stale results are dropped
+	lastFired    string   // query of the most recently fired search
+	liveBusy     bool     // a type-ahead search is in flight
+	queue        []video  // videos staged for sequential playback
+	status       string
 	errMsg       string
 }
 
@@ -463,12 +667,15 @@ func initialModel(args []string) model {
 
 	m := model{
 		input:      ti,
+		spin:       spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(lipgloss.NewStyle().Foreground(accent))),
 		state:      promptState,
 		proto:      protoAnsi,
 		thumbs:     make(map[string]string),
 		thumbBusy:  make(map[string]bool),
 		details:    make(map[string]videoDetail),
 		detailBusy: make(map[string]bool),
+		history:    loadHistory(historyFilePath()),
+		histIdx:    -1,
 	}
 	if len(args) > 0 {
 		m.query = strings.Join(args, " ")
@@ -511,13 +718,31 @@ func computeLayout(winW, winH int) layout {
 	return l
 }
 
+// liveSearchState prepares a debounced type-ahead search for whatever the user
+// typed, returning the new generation (only advanced when a tick is armed).
+// Every keystroke bumps the generation; only the newest surviving tick fires,
+// and it re-checks the text before doing so.
+func (m model) liveSearchState() (int, tea.Cmd) {
+	if m.state != promptState {
+		return m.searchGen, nil
+	}
+	q := strings.TrimSpace(m.input.Value())
+	if q == "" || q == m.lastFired {
+		return m.searchGen, nil
+	}
+	gen := m.searchGen + 1
+	return gen, tea.Tick(searchDebounce, func(_ time.Time) tea.Msg {
+		return debounceMsg{gen: gen, query: q}
+	})
+}
+
 // ---- Update ---------------------------------------------------------------
 
 func (m model) Init() tea.Cmd {
 	// The input is focused on the model the update loop runs (set in
 	// initialModel). Init runs on a copy, so focusing here would be lost.
 	if m.state == searchingState {
-		return searchCmd(m.query, searchResults, false)
+		return searchCmd(m.query, searchResults, false, m.searchGen, false)
 	}
 	return nil
 }
@@ -557,14 +782,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.Type {
 			case tea.KeyEsc:
 				return m, tea.Quit
+			case tea.KeyCtrlP:
+				return m.historyPrev(), nil
+			case tea.KeyCtrlN:
+				return m.historyNext(), nil
 			case tea.KeyEnter:
 				q := strings.TrimSpace(m.input.Value())
 				if q == "" {
 					return m, nil
 				}
 				m.query = q
+				m = m.rememberQuery(q)
+				m.searchGen++
+				m.liveBusy = false
 				m.state = searchingState
-				return m, searchCmd(q, searchResults, false)
+				return m, searchCmd(q, searchResults, false, m.searchGen, false)
+			default:
+				m.histIdx = -1
+				m.pending = ""
+				// Typing and editing reschedule the type-ahead search; arrow
+				// keys also land here, but the debounce re-checks the query
+				// text, so the extra tick is a harmless no-op.
+				gen, c := m.liveSearchState()
+				if c != nil {
+					m.searchGen = gen
+					cmds = append(cmds, c)
+				}
 			}
 
 		case searchingState:
@@ -579,6 +822,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// back to the search bar for a fresh search
 				m.state = promptState
 				m.errMsg = ""
+				m.status = ""
+				m.liveBusy = false
+				m.lastFired = ""
 				return m, nil
 			case tea.KeyEnter:
 				// Launch mpv in the background (Cmd.Start, non-blocking) and keep
@@ -587,7 +833,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				v := m.filtered[m.cursor]
-				if err := playInMPV(v); err != nil {
+				if err := playInMPV(v.watchURL()); err != nil {
 					m.errMsg = err.Error()
 					return m, nil
 				}
@@ -620,6 +866,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					down = true
 				case "k":
 					up = true
+				case "c":
+					if len(m.filtered) > 0 {
+						cmds = append(cmds, copyURLCmd(m.filtered[m.cursor].watchURL()))
+					}
+				case "o":
+					if len(m.filtered) > 0 {
+						if c := m.openChannel(m.filtered[m.cursor]); c != nil {
+							cmds = append(cmds, c)
+						}
+					}
+				case "a":
+					if len(m.filtered) > 0 {
+						m.queue = append(m.queue, m.filtered[m.cursor])
+						m.errMsg = ""
+						m.status = fmt.Sprintf("queued · %d in queue", len(m.queue))
+					}
+				case "p":
+					m = m.playQueue()
 				}
 			}
 			if down && m.cursor < len(m.filtered)-1 {
@@ -637,21 +901,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// after a merge the user still decides when to scroll on.
 			if m.shouldLoadMore() {
 				m.fetchingMore = true
-				cmds = append(cmds, searchCmd(m.query, m.fetched+searchResults, true))
+				cmds = append(cmds, searchCmd(m.query, m.fetched+searchResults, true, m.searchGen, false))
 			}
 		}
 
 	case searchMsg:
 		m.fetchingMore = false
+		if msg.gen != m.searchGen {
+			// superseded by a newer fired search; drop the stale batch.
+			return m, nil
+		}
+		m.liveBusy = false
 		if msg.err != nil {
 			m.errMsg = msg.err.Error()
 			if !msg.more {
 				m.filtered = nil
-				m.state = resultsState
+				if msg.live {
+					m.state = promptState
+				} else {
+					m.state = resultsState
+				}
 			}
 			return m, nil
 		}
 		m.errMsg = ""
+		m.status = ""
 		if msg.more {
 			m.filtered = mergeResults(m.filtered, msg.videos)
 		} else {
@@ -661,6 +935,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.fetched = msg.limit
 		cmds = append(cmds, m.loadSelection())
+
+	case debounceMsg:
+		if msg.gen != m.searchGen || m.state != promptState {
+			return m, nil
+		}
+		q := strings.TrimSpace(m.input.Value())
+		if q == "" || q != msg.query {
+			return m, nil
+		}
+		m.query = q
+		m.lastFired = q
+		m.liveBusy = true
+		m.errMsg = ""
+		return m, searchCmd(q, searchResults, false, m.searchGen, true)
+
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 
 	case thumbMsg:
 		key := thumbKey(msg.id, msg.cols, msg.rows)
@@ -696,6 +991,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.details[msg.id] = msg.det
+	case copyMsg:
+		if msg.err != nil {
+			m.status = ""
+			m.errMsg = "copy: " + msg.err.Error()
+			return m, nil
+		}
+		m.errMsg = ""
+		m.status = "copied " + msg.url
+
+	case openMsg:
+		if msg.err != nil {
+			m.status = ""
+			m.errMsg = "open: " + msg.err.Error()
+			return m, nil
+		}
+		m.errMsg = ""
+		m.status = "opened " + msg.url
+	}
+
+	if m.state == searchingState {
+		cmds = append(cmds, m.spin.Tick)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -807,14 +1123,42 @@ func thumbDims(rightW, midH int) (cols, rows int, ok bool) {
 	return cols, rows, true
 }
 
-func playInMPV(v video) error {
+// queueURLs resolves the playable watch URLs for a staged queue.
+func queueURLs(queue []video) []string {
+	urls := make([]string, len(queue))
+	for i, v := range queue {
+		urls[i] = v.watchURL()
+	}
+	return urls
+}
+
+// playQueue starts mpv with every queued video, playing them in sequence, and
+// clears the queue. The list survives on launch error so it can be retried.
+func (m model) playQueue() model {
+	if len(m.queue) == 0 {
+		m.status = ""
+		m.errMsg = "queue is empty — press a to add videos"
+		return m
+	}
+	urls := queueURLs(m.queue)
+	if err := playInMPV(urls...); err != nil {
+		m.errMsg = err.Error()
+		return m
+	}
+	m.errMsg = ""
+	m.status = fmt.Sprintf("playing %d queued videos", len(urls))
+	m.queue = nil
+	return m
+}
+
+func playInMPV(urls ...string) error {
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
 		return fmt.Errorf("mpv: %w", err)
 	}
 	defer devnull.Close()
 
-	cmd := exec.Command("mpv", v.watchURL())
+	cmd := exec.Command("mpv", urls...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// Detach mpv from the TUI's streams: stdin would otherwise receive the
 	// keystrokes the TUI is listening for, and mpv's own output would print
@@ -860,26 +1204,37 @@ func (m model) viewPrompt() string {
 		Padding(1, 2).
 		Width(46)
 
-	content := strings.Join([]string{
+	content := []string{
 		lipgloss.NewStyle().Bold(true).Foreground(accent).Render("Search YouTube"),
 		"",
 		m.input.View(),
 		"",
 		lipgloss.NewStyle().Foreground(fgDim).Render("Type a query and press enter to play in mpv"),
 		lipgloss.NewStyle().Foreground(fgDim).Render("Ctrl+C / Esc to quit"),
-	}, "\n")
+	}
+	if len(m.history) > 0 {
+		content = append(content,
+			lipgloss.NewStyle().Foreground(fgDim).Render(
+				fmt.Sprintf("Ctrl+P / Ctrl+N to recall past searches (%d)", len(m.history))),
+		)
+	}
+	if m.liveBusy {
+		content = append(content, lipgloss.NewStyle().Foreground(accent).Render("searching…"))
+	}
+	if m.errMsg != "" {
+		content = append(content, lipgloss.NewStyle().Foreground(red).Render(m.errMsg))
+	}
 
 	centered := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-		lipgloss.JoinVertical(lipgloss.Center, m.titleLine(), box.Render(content)))
+		lipgloss.JoinVertical(lipgloss.Center, m.titleLine(), box.Render(strings.Join(content, "\n"))))
 	return centered
 }
 
 func (m model) viewSearching() string {
-	spinner := lipgloss.NewStyle().Foreground(accent).Render("…")
 	msg := lipgloss.NewStyle().Foreground(fg).Render("Searching for ") +
 		lipgloss.NewStyle().Bold(true).Foreground(fg).Render("“"+m.query+"”")
 	centered := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-		lipgloss.JoinVertical(lipgloss.Center, m.titleLine(), spinner, " ", msg))
+		lipgloss.JoinVertical(lipgloss.Center, m.titleLine(), m.spin.View(), " ", msg))
 	return centered
 }
 
@@ -890,6 +1245,7 @@ func (m model) viewResults() string {
 		lipgloss.JoinHorizontal(lipgloss.Left,
 			m.titleLine(),
 			lipgloss.NewStyle().Foreground(fgDim).Render(fmt.Sprintf(" %d results", len(m.filtered))),
+			lipgloss.NewStyle().Foreground(accent).Render(fmt.Sprintf(" · %d queued", len(m.queue))),
 		),
 	)
 
@@ -910,6 +1266,9 @@ func (m model) viewResults() string {
 
 	if m.errMsg != "" {
 		out.WriteString("\n" + lipgloss.NewStyle().Foreground(red).Render(m.errMsg))
+	}
+	if m.status != "" {
+		out.WriteString("\n" + lipgloss.NewStyle().Padding(0, 1).Foreground(accent).Render(m.status))
 	}
 	if len(m.filtered) == 0 && m.errMsg == "" {
 		out.WriteString("\n" + lipgloss.NewStyle().Foreground(fgMid).Render("Nothing to show — press Esc to search again"))
@@ -949,7 +1308,7 @@ func (m model) viewList(l layout) string {
 		if i == m.cursor {
 			marker = "▌"
 		}
-		line := marker + " " + truncate(v.Title, l.leftW-4)
+		line := marker + " " + listRow(v, l.leftW-4)
 		if i == m.cursor {
 			line = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(line)
 		} else {
@@ -1031,6 +1390,24 @@ func (m model) viewPreview(l layout) string {
 		Height(l.midH).
 		Padding(0, 1)
 	return style.Render(body.String())
+}
+
+// listRow lays out a list entry with the duration right-aligned: the title is
+// truncated to leave room for a timestamp, and the row is exactly width runes.
+func listRow(v video, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	dur := v.duration()
+	if dur == "?:??" || width < len(dur)+3 {
+		return truncate(v.Title, width)
+	}
+	title := truncate(v.Title, width-len(dur)-1)
+	pad := width - len([]rune(title)) - len(dur)
+	if pad < 0 {
+		pad = 0
+	}
+	return title + strings.Repeat(" ", pad) + dur
 }
 
 // truncate clips s to n runes.
