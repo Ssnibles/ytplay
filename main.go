@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/blacktop/go-termimg"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -171,6 +172,11 @@ type thumbMsg struct {
 type detailMsg struct {
 	id  string
 	det videoDetail
+	err error
+}
+
+type copyMsg struct {
+	url string
 	err error
 }
 
@@ -414,6 +420,17 @@ func fetchThumb(v video) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
+// copyURLCmd writes url to the system clipboard (yank) and reports back so the
+// TUI can confirm without blocking on the clipboard service.
+func copyURLCmd(url string) tea.Cmd {
+	return func() tea.Msg {
+		if err := clipboard.WriteAll(url); err != nil {
+			return copyMsg{url, err}
+		}
+		return copyMsg{url, nil}
+	}
+}
+
 // ---- model -----------------------------------------------------------------
 
 type state int
@@ -439,6 +456,7 @@ type model struct {
 	detailBusy   map[string]bool
 	fetched      int  // how many results have been asked for so far
 	fetchingMore bool // a follow-up page is in flight
+	status       string
 	errMsg       string
 }
 
@@ -576,6 +594,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// back to the search bar for a fresh search
 				m.state = promptState
 				m.errMsg = ""
+				m.status = ""
 				return m, nil
 			case tea.KeyEnter:
 				// Launch mpv in the background (Cmd.Start, non-blocking) and keep
@@ -617,6 +636,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					down = true
 				case "k":
 					up = true
+				case "c":
+					if len(m.filtered) > 0 {
+						cmds = append(cmds, copyURLCmd(m.filtered[m.cursor].watchURL()))
+					}
 				}
 			}
 			if down && m.cursor < len(m.filtered)-1 {
@@ -649,6 +672,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.errMsg = ""
+		m.status = ""
 		if msg.more {
 			m.filtered = mergeResults(m.filtered, msg.videos)
 		} else {
@@ -679,6 +703,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.details[msg.id] = msg.det
+
+	case copyMsg:
+		if msg.err != nil {
+			m.status = ""
+			m.errMsg = "copy: " + msg.err.Error()
+			return m, nil
+		}
+		m.errMsg = ""
+		m.status = "copied " + msg.url
 	}
 
 	return m, tea.Batch(cmds...)
@@ -881,6 +914,9 @@ func (m model) viewResults() string {
 
 	if m.errMsg != "" {
 		out.WriteString("\n" + lipgloss.NewStyle().Foreground(red).Render(m.errMsg))
+	}
+	if m.status != "" {
+		out.WriteString("\n" + lipgloss.NewStyle().Padding(0, 1).Foreground(accent).Render(m.status))
 	}
 	if len(m.filtered) == 0 && m.errMsg == "" {
 		out.WriteString("\n" + lipgloss.NewStyle().Foreground(fgMid).Render("Nothing to show — press Esc to search again"))

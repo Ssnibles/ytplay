@@ -524,6 +524,51 @@ func TestPreviewShowsDetails(t *testing.T) {
 	}
 }
 
+func TestCopyKeyQueuesCommand(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{{ID: "a1", Title: "One", URL: "https://youtu.be/a1", Channel: "C"}},
+	})
+	mm, cmd := m.Update(keyRunes("c"))
+	if cmd == nil {
+		t.Fatal("pressing c should queue a copy command")
+	}
+	_ = mm
+}
+
+func TestCopyMsgSetsStatus(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{{ID: "a1", Title: "One", URL: "https://youtu.be/a1", Channel: "C"}},
+	})
+	m = update(m, copyMsg{url: "https://youtu.be/a1"})
+	md := m.(model)
+	if !strings.Contains(md.status, "https://youtu.be/a1") {
+		t.Fatalf("status should confirm the copied URL, got %q", md.status)
+	}
+	if out := md.viewResults(); !strings.Contains(out, "copied") {
+		t.Fatalf("results view should render the status line")
+	}
+}
+
+func TestCopyFailureSetsError(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{{ID: "a1", Title: "One", URL: "https://youtu.be/a1", Channel: "C"}},
+	})
+	m = update(m, copyMsg{url: "x", err: errTest})
+	md := m.(model)
+	if md.status != "" {
+		t.Fatalf("status should be cleared on failure, got %q", md.status)
+	}
+	if md.errMsg == "" {
+		t.Fatal("expected an error message on clipboard failure")
+	}
+}
+
 func kittyImageNum(t *testing.T, s string) string {
 	t.Helper()
 	start := strings.Index(s, "\x1b_G")
