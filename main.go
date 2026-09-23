@@ -1236,7 +1236,7 @@ func (m model) viewList(l layout) string {
 		if i == m.cursor {
 			marker = "▌"
 		}
-		line := marker + " " + listRow(v, l.leftW-4)
+		line := marker + " " + listRow(v, l.leftW-6)
 		if i == m.cursor {
 			line = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(line)
 		} else {
