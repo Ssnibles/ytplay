@@ -36,6 +36,7 @@ var (
 	fg      = lipgloss.Color("cdcdcd")
 	fgMid   = lipgloss.Color("878787")
 	fgDim   = lipgloss.Color("606079")
+	grey    = lipgloss.Color("8a8a8a")
 	bgRound = lipgloss.Color("252530")
 )
 
@@ -607,6 +608,7 @@ const (
 	promptState state = iota
 	searchingState
 	resultsState
+	queueState
 )
 
 type model struct {
@@ -629,6 +631,7 @@ type model struct {
 	histIdx      int      // -1 = editing fresh text, else index into history
 	pending      string   // typed text saved when entering history navigation
 	queue        []video  // videos staged for sequential playback
+	queueCursor  int      // selected row on the queue page
 	status       string
 	errMsg       string
 }
@@ -684,11 +687,13 @@ type layout struct {
 }
 
 // computeLayout derives pane geometry from the window size. Both panes are
-// pinned to winH-6 lines so header(1) + input(1) + panes + two footer lines
-// can never exceed the window: a taller frame would scroll the terminal and
-// desync the cell-anchored image. The preview body (borders out) holds title +
-// meta + spacer (three lines), the image, and detailLines of channel/video
-// stats, so the image rows are capped at midH-6-detailLines.
+// pinned to midH = winH-4 lines so header(1) + input(1) + panes + a two-line
+// text/footer zone fill the window exactly, top to bottom: a frame that scrolls
+// would desync the cell-anchored image. Widths are content widths (lipgloss
+// adds the two border columns), so the outer boxes sum to exactly the window
+// width. The preview body holds title + meta + spacer (three lines), the image,
+// and detailLines of channel/video stats, so the image rows are capped at
+// midH-6-detailLines.
 func computeLayout(winW, winH int) layout {
 	l := layout{}
 	if winW <= 0 || winH <= 0 {
@@ -696,7 +701,7 @@ func computeLayout(winW, winH int) layout {
 	}
 	l.leftW = winW * 45 / 100
 	l.rightW = winW - l.leftW - 1
-	l.midH = winH - 6
+	l.midH = winH - 4
 	l.avail = l.midH - 2 // list rows: pane lines minus its two borders
 	l.cols, l.rows, l.thumbOK = thumbDims(l.rightW, l.midH)
 	return l
@@ -772,6 +777,60 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 
+		case queueState:
+			if len(m.queue) == 0 {
+				m.queueCursor = 0
+			}
+			switch msg.Type {
+			case tea.KeyEsc:
+				// back to the results list, keeping the queue intact.
+				m.state = resultsState
+				m.errMsg = ""
+				m.status = ""
+				return m, nil
+			case tea.KeyEnter:
+				m = m.playFromQueue()
+				cmds = append(cmds, m.loadSelectionFor(m.queue, m.queueCursor))
+				return m, tea.Batch(cmds...)
+			}
+
+			// queue navigation and manipulation
+			var down, up bool
+			switch msg.Type {
+			case tea.KeyDown, tea.KeyTab:
+				down = true
+			case tea.KeyUp, tea.KeyShiftTab:
+				up = true
+			case tea.KeyRunes:
+				switch string(msg.Runes) {
+				case "j":
+					down = true
+				case "k":
+					up = true
+				case "J":
+					m = m.moveQueueDown()
+				case "K":
+					m = m.moveQueueUp()
+				case "x", "d":
+					m = m.removeQueueAt(m.queueCursor)
+					cmds = append(cmds, m.loadSelectionFor(m.queue, m.queueCursor))
+				case "p":
+					m = m.playQueue()
+				case "c":
+					if len(m.queue) > 0 {
+						cmds = append(cmds, copyURLCmd(m.queue[m.queueCursor].watchURL()))
+					}
+				}
+			}
+			if down && m.queueCursor < len(m.queue)-1 {
+				m.queueCursor++
+				cmds = append(cmds, m.loadSelectionFor(m.queue, m.queueCursor))
+			}
+			if up && m.queueCursor > 0 {
+				m.queueCursor--
+				cmds = append(cmds, m.loadSelectionFor(m.queue, m.queueCursor))
+			}
+
 		case resultsState:
 			switch msg.Type {
 			case tea.KeyEsc:
@@ -838,6 +897,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				case "p":
 					m = m.playQueue()
+				case "q":
+					m.state = queueState
+					m.errMsg = ""
+					m.status = ""
+					cmds = append(cmds, m.loadSelectionFor(m.queue, m.queueCursor))
+					return m, tea.Batch(cmds...)
 				}
 			}
 			if down && m.cursor < len(m.filtered)-1 {
@@ -948,19 +1013,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// loadThumb issues a thumbnail render for the currently selected video if it
-// hasn't been rendered at the current pane size. Busy tracking is keyed the
+// loadThumb issues a thumbnail render for the currently selected result if it
+// hasn't been rendered at the current pane size.
+func (m model) loadThumb() tea.Cmd {
+	if m.state != resultsState {
+		return nil
+	}
+	return m.loadThumbFor(m.filtered, m.cursor)
+}
+
+// loadThumbFor issues a thumbnail render for the video at cursor in videos if
+// it hasn't been rendered at the current pane size. Busy tracking is keyed the
 // same way as the render cache (id@size), so a resize in flight doesn't get
 // suppressed by a smaller-size fetch that is still queued.
-func (m model) loadThumb() tea.Cmd {
-	if len(m.filtered) == 0 || m.state != resultsState {
+func (m model) loadThumbFor(videos []video, cursor int) tea.Cmd {
+	if len(videos) == 0 || cursor < 0 || cursor >= len(videos) {
 		return nil
 	}
 	l := computeLayout(m.width, m.height)
 	if !l.thumbOK {
 		return nil
 	}
-	v := m.filtered[m.cursor]
+	v := videos[cursor]
 	key := thumbKey(v.ID, l.cols, l.rows)
 	if _, cached := m.thumbs[key]; cached {
 		return nil
@@ -976,16 +1050,21 @@ func (m model) loadThumb() tea.Cmd {
 // thumbnail (the two panes may paint it at a different size) and its channel
 // stats. Both are no-ops when already cached or in flight.
 func (m model) loadSelection() tea.Cmd {
+	return m.loadSelectionFor(m.filtered, m.cursor)
+}
+
+// loadSelectionFor issues thumbnails and stats for the video at cursor in
+// videos. Stats are the slow part of a selection (a full extract per video), so
+// fetch a small lookahead window rather than only the selected one: by the time
+// the user scrolls into a neighbour its stats are usually cached. Each fetch is
+// a no-op when cached or in flight, so this stays cheap.
+func (m model) loadSelectionFor(videos []video, cursor int) tea.Cmd {
 	var cmds []tea.Cmd
-	if c := m.loadThumb(); c != nil {
+	if c := m.loadThumbFor(videos, cursor); c != nil {
 		cmds = append(cmds, c)
 	}
-	// Stats are the slow part of a selection (a full extract per video), so
-	// fetch a small lookahead window rather than only the selected one: by the
-	// time the user scrolls into a neighbour its stats are usually cached.
-	// Each fetch is a no-op when cached or in flight, so this stays cheap.
-	for i := 0; i <= detailLookahead && m.cursor+i < len(m.filtered); i++ {
-		if c := m.loadDetailAt(m.cursor + i); c != nil {
+	for i := 0; i <= detailLookahead && cursor+i < len(videos); i++ {
+		if c := m.loadDetailFor(videos[cursor+i]); c != nil {
 			cmds = append(cmds, c)
 		}
 	}
@@ -1079,6 +1158,67 @@ func (m model) playQueue() model {
 	m.errMsg = ""
 	m.status = fmt.Sprintf("playing %d queued videos", len(urls))
 	m.queue = nil
+	m.queueCursor = 0
+	return m
+}
+
+// moveQueueUp swaps the selected queued video with the one above it.
+func (m model) moveQueueUp() model {
+	if m.queueCursor <= 0 {
+		return m
+	}
+	i := m.queueCursor
+	m.queue[i], m.queue[i-1] = m.queue[i-1], m.queue[i]
+	m.queueCursor--
+	m.status = ""
+	m.errMsg = ""
+	return m
+}
+
+// moveQueueDown swaps the selected queued video with the one below it.
+func (m model) moveQueueDown() model {
+	if m.queueCursor >= len(m.queue)-1 {
+		return m
+	}
+	i := m.queueCursor
+	m.queue[i], m.queue[i+1] = m.queue[i+1], m.queue[i]
+	m.queueCursor++
+	m.status = ""
+	m.errMsg = ""
+	return m
+}
+
+// removeQueueAt deletes the queued video at i, keeping the cursor sensible.
+func (m model) removeQueueAt(i int) model {
+	if i < 0 || i >= len(m.queue) {
+		return m
+	}
+	m.queue = append(m.queue[:i], m.queue[i+1:]...)
+	if len(m.queue) == 0 {
+		m.queueCursor = 0
+	} else if m.queueCursor >= len(m.queue) {
+		m.queueCursor = len(m.queue) - 1
+	}
+	m.status = ""
+	m.errMsg = ""
+	return m
+}
+
+// playFromQueue plays only the selected queued video (unlike playQueue, which
+// plays the whole list), removes it from the queue and keeps the rest in their
+// current order. The item is removed even if launching mpv fails, so the queue
+// always reflects "what's left to watch".
+func (m model) playFromQueue() model {
+	if len(m.queue) == 0 {
+		return m
+	}
+	v := m.queue[m.queueCursor]
+	m = m.removeQueueAt(m.queueCursor)
+	m.status = fmt.Sprintf("playing %q", v.Title)
+	if err := playInMPV(v.watchURL()); err != nil {
+		m.status = ""
+		m.errMsg = err.Error()
+	}
 	return m
 }
 
@@ -1114,6 +1254,8 @@ func (m model) View() string {
 		return m.viewPrompt()
 	case searchingState:
 		return m.viewSearching()
+	case queueState:
+		return m.viewQueue()
 	default:
 		return m.viewResults()
 	}
@@ -1139,22 +1281,27 @@ func (m model) viewPrompt() string {
 		lipgloss.NewStyle().Bold(true).Foreground(accent).Render("Search YouTube"),
 		"",
 		m.input.View(),
-		"",
-		lipgloss.NewStyle().Foreground(fgDim).Render("Type a query and press enter to play in mpv"),
-		lipgloss.NewStyle().Foreground(fgDim).Render("Ctrl+C / Esc to quit"),
+	}
+	if m.errMsg != "" {
+		content = append(content, "", lipgloss.NewStyle().Foreground(red).Render(m.errMsg))
+	}
+
+	hints := []string{
+		lipgloss.NewStyle().Foreground(grey).Render("Type a query and press enter to play in mpv"),
+		lipgloss.NewStyle().Foreground(grey).Render("Ctrl+C / Esc to quit"),
 	}
 	if len(m.history) > 0 {
-		content = append(content,
-			lipgloss.NewStyle().Foreground(fgDim).Render(
+		hints = append(hints,
+			lipgloss.NewStyle().Foreground(grey).Render(
 				fmt.Sprintf("Ctrl+P / Ctrl+N to recall past searches (%d)", len(m.history))),
 		)
 	}
-	if m.errMsg != "" {
-		content = append(content, lipgloss.NewStyle().Foreground(red).Render(m.errMsg))
-	}
 
 	centered := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-		lipgloss.JoinVertical(lipgloss.Center, m.titleLine(), box.Render(strings.Join(content, "\n"))))
+		lipgloss.JoinVertical(lipgloss.Center,
+			m.titleLine(),
+			box.Render(strings.Join(content, "\n")),
+			strings.Join(hints, "\n")))
 	return centered
 }
 
@@ -1164,6 +1311,36 @@ func (m model) viewSearching() string {
 	centered := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
 		lipgloss.JoinVertical(lipgloss.Center, m.titleLine(), m.spin.View(), " ", msg))
 	return centered
+}
+
+func (m model) viewQueue() string {
+	l := computeLayout(m.width, m.height)
+
+	// the queue page reuses the exact results layout: header, bar, the two
+	// content panes (list + preview), a hint footer, and status/errors.
+	header := lipgloss.NewStyle().Padding(0, 1).Render(
+		lipgloss.JoinHorizontal(lipgloss.Left,
+			m.titleLine(),
+			lipgloss.NewStyle().Foreground(fgDim).Render(fmt.Sprintf(" Queue · %d videos", len(m.queue))),
+		),
+	)
+
+	bar := "Up next"
+	hint := ""
+	if len(m.queue) > 0 {
+		hint = "j/k move · K/J reorder · x remove · Enter play · p play all · c copy · Esc back"
+	}
+	empty := ""
+	if len(m.queue) == 0 && m.errMsg == "" {
+		empty = "queue is empty — press a on a result to add videos"
+	}
+
+	return m.pageFrame(header, bar, hint, m.contentPanes(l, m.queue, m.queueCursor), empty)
+}
+
+// actionHints summarises the results-screen key bindings for the footer.
+func actionHints() string {
+	return "Enter play · a queue · q view queue · c copy link · o open in browser · Esc new search"
 }
 
 func (m model) viewResults() string {
@@ -1177,29 +1354,53 @@ func (m model) viewResults() string {
 		),
 	)
 
-	mid := lipgloss.JoinHorizontal(lipgloss.Top, m.viewList(l), " ", m.viewPreview(l))
-
-	var out strings.Builder
-	out.WriteString(header)
-	out.WriteString("\n")
 	// The input row is replaced by a plain read-only line here: typing is
 	// ignored on the results screen (Esc returns to the editable prompt).
 	bar := "Search: " + m.query
 	if m.fetchingMore {
 		bar += "  ·  loading more…"
 	}
+
+	hint := ""
+	if len(m.filtered) > 0 {
+		hint = actionHints()
+	}
+	empty := ""
+	if len(m.filtered) == 0 && m.errMsg == "" {
+		empty = "Nothing to show — press Esc to search again"
+	}
+
+	return m.pageFrame(header, bar, hint, m.contentPanes(l, m.filtered, m.cursor), empty)
+}
+
+// pageFrame assembles the results-style layout shared by the results and queue
+// pages: header, read-only bar, the two content panes, and a two-line footer
+// zone (a hint on the first row, then error/status/empty on the second) that is
+// always rendered — blank when unused — so the page fills the window exactly.
+func (m model) pageFrame(header, bar, hint, mid, empty string) string {
+	var out strings.Builder
+	out.WriteString(header)
+	out.WriteString("\n")
 	out.WriteString(lipgloss.NewStyle().Padding(0, 1).Foreground(fgDim).Render(bar))
 	out.WriteString("\n")
 	out.WriteString(mid)
 
-	if m.errMsg != "" {
+	// footer row one: hints (blank when there is nothing to hint about)
+	if hint != "" {
+		out.WriteString("\n" + lipgloss.NewStyle().Padding(0, 1).Foreground(grey).Render(hint))
+	} else {
+		out.WriteString("\n")
+	}
+	// footer row two: error, else status, else the empty-state message
+	switch {
+	case m.errMsg != "":
 		out.WriteString("\n" + lipgloss.NewStyle().Foreground(red).Render(m.errMsg))
-	}
-	if m.status != "" {
+	case m.status != "":
 		out.WriteString("\n" + lipgloss.NewStyle().Padding(0, 1).Foreground(accent).Render(m.status))
-	}
-	if len(m.filtered) == 0 && m.errMsg == "" {
-		out.WriteString("\n" + lipgloss.NewStyle().Foreground(fgMid).Render("Nothing to show — press Esc to search again"))
+	case empty != "":
+		out.WriteString("\n" + lipgloss.NewStyle().Foreground(fgMid).Render(empty))
+	default:
+		out.WriteString("\n")
 	}
 
 	// Belt and suspenders: the panes are height-pinned so the frame always
@@ -1213,31 +1414,36 @@ func (m model) viewResults() string {
 	return strings.Join(lines, "\n")
 }
 
-func (m model) viewList(l layout) string {
-	if len(m.filtered) == 0 {
-		return lipgloss.NewStyle().Width(l.leftW - 2).Height(l.midH).Render("")
+// contentPanes renders the shared two-pane list/preview layout for videos.
+func (m model) contentPanes(l layout, videos []video, cursor int) string {
+	return lipgloss.JoinHorizontal(lipgloss.Top, m.viewList(l, videos, cursor), " ", m.viewPreview(l, videos, cursor))
+}
+
+func (m model) viewList(l layout, videos []video, cursor int) string {
+	if len(videos) == 0 {
+		return lipgloss.NewStyle().Width(l.leftW - 2).Height(l.midH - 2).Render("")
 	}
 
 	// Keep the cursor on screen: once it passes the last visible row, the
 	// window scrolls instead of letting the highlight vanish off the bottom.
 	start := 0
-	if m.cursor >= l.avail {
-		start = m.cursor - l.avail + 1
+	if cursor >= l.avail {
+		start = cursor - l.avail + 1
 	}
 	end := start + l.avail
-	if end > len(m.filtered) {
-		end = len(m.filtered)
+	if end > len(videos) {
+		end = len(videos)
 	}
 
 	var lines []string
 	for i := start; i < end; i++ {
-		v := m.filtered[i]
+		v := videos[i]
 		marker := " "
-		if i == m.cursor {
+		if i == cursor {
 			marker = "▌"
 		}
 		line := marker + " " + listRow(v, l.leftW-6)
-		if i == m.cursor {
+		if i == cursor {
 			line = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(line)
 		} else {
 			line = lipgloss.NewStyle().Foreground(fg).Render(line)
@@ -1245,49 +1451,55 @@ func (m model) viewList(l layout) string {
 		lines = append(lines, line)
 	}
 
+	// Height is content height: lipgloss adds the two border lines, so use
+	// midH-2 so the whole pane outer box is exactly the pinned midH rows tall.
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(bgRound).
 		Width(l.leftW-2).
-		Height(l.midH).
+		Height(l.midH-2).
 		Padding(0, 1)
 	return style.Render(strings.Join(lines, "\n"))
 }
 
-// hint renders a short dim line that fits the preview pane body.
+// hint renders a short dim grey line that fits the preview pane body.
 func hint(s string, width int) string {
-	return lipgloss.NewStyle().Foreground(fgDim).Render(truncate(s, width))
+	return lipgloss.NewStyle().Foreground(grey).Render(truncate(s, width))
 }
 
-func (m model) viewPreview(l layout) string {
-	if len(m.filtered) == 0 {
-		return lipgloss.NewStyle().Width(l.rightW).Height(l.midH).Render("")
+func (m model) viewPreview(l layout, videos []video, cursor int) string {
+	if len(videos) == 0 {
+		return lipgloss.NewStyle().Width(l.rightW).Height(l.midH - 2).Render("")
 	}
-	v := m.filtered[m.cursor]
+	v := videos[cursor]
+
+	// usable body width: the box is Width(rightW-2) with 1 column of inner
+	// padding each side.
+	w := l.rightW - 4
 
 	var body strings.Builder
-	title := truncate(v.Title, l.rightW-6)
+	title := truncate(v.Title, w)
 	if dur := v.duration(); dur != "?:??" {
-		title = truncate(v.Title, l.rightW-6-len(dur)-3) + " • " + dur
+		title = truncate(v.Title, w-len(dur)-3) + " • " + dur
 	}
 	body.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accent).Render(title))
 	body.WriteString("\n")
-	body.WriteString(lipgloss.NewStyle().Foreground(fgMid).Render(truncate(v.channel(), l.rightW-6)))
+	body.WriteString(lipgloss.NewStyle().Foreground(fgMid).Render(truncate(v.channel(), w)))
 	body.WriteString("\n\n")
 
 	key := thumbKey(v.ID, l.cols, l.rows)
 	if !l.thumbOK {
-		body.WriteString(hint("terminal too small for a thumbnail", l.rightW-6))
+		body.WriteString(hint("terminal too small for a thumbnail", w))
 	} else if art, ok := m.thumbs[key]; ok {
 		switch {
 		case art == "":
-			body.WriteString(hint("no thumbnail available", l.rightW-6))
+			body.WriteString(hint("no thumbnail available", w))
 		case m.proto == protoAnsi:
 			// half-block art is plain text: it is recomputed by the renderer
 			// each frame and padded to the pane width.
 			artLines := strings.Split(art, "\n")
 			for i, ln := range artLines {
-				artLines[i] = simplePad(ln, l.rightW-4)
+				artLines[i] = simplePad(ln, w)
 			}
 			body.WriteString(strings.Join(artLines, "\n"))
 		default:
@@ -1298,27 +1510,27 @@ func (m model) viewPreview(l layout) string {
 			body.WriteString(art)
 		}
 	} else {
-		body.WriteString(hint("loading thumbnail…", l.rightW-6))
+		body.WriteString(hint("loading thumbnail…", w))
 	}
 	if m.thumbBusy[key] {
-		body.WriteString("\n" + hint("fetching thumbnail…", l.rightW-6))
+		body.WriteString("\n" + hint("fetching thumbnail…", w))
 	}
 
 	// channel & video stats below the thumbnail
 	if d, ok := m.details[v.ID]; ok {
-		if lines := d.lines(l.rightW - 6); len(lines) > 0 {
+		if lines := d.lines(w); len(lines) > 0 {
 			body.WriteString("\n")
 			body.WriteString(strings.Join(lines, "\n"))
 		}
 	} else if m.detailBusy[v.ID] {
-		body.WriteString("\n" + hint("loading details…", l.rightW-6))
+		body.WriteString("\n" + hint("loading details…", w))
 	}
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(bgRound).
 		Width(l.rightW-2).
-		Height(l.midH).
+		Height(l.midH-2).
 		Padding(0, 1)
 	return style.Render(body.String())
 }

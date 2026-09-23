@@ -272,9 +272,9 @@ func TestLayoutGeometry(t *testing.T) {
 		left, right, mid, avail, cols, rows int
 		ok                                  bool
 	}{
-		{120, 40, 54, 65, 34, 32, 61, 17, true},
-		{80, 24, 36, 43, 18, 16, 32, 9, true},
-		{40, 12, 18, 21, 6, 4, 0, 0, false},
+		{120, 40, 54, 65, 36, 34, 61, 17, true},
+		{80, 24, 36, 43, 20, 18, 39, 11, true},
+		{40, 12, 18, 21, 8, 6, 0, 0, false},
 		{0, 0, 0, 0, 0, 0, 0, 0, false},
 	}
 	for _, c := range cases {
@@ -571,7 +571,7 @@ func TestPreviewShowsDetails(t *testing.T) {
 			subs: i64p(1234567), chViews: i64p(85000000), views: i64p(45000), uploaded: "20240115",
 		}},
 	}
-	out := m.viewPreview(computeLayout(120, 40))
+	out := m.viewPreview(computeLayout(120, 40), m.filtered, 0)
 	for _, want := range []string{"1.2M subscribers", "85M total channel views", "Jan 15, 2024"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("preview missing %q:\n%s", want, out)
@@ -789,6 +789,130 @@ func TestQueueURLs(t *testing.T) {
 			t.Fatalf("queueURLs[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
+}
+
+func TestQueueMoveUp(t *testing.T) {
+	m := model{queue: []video{{ID: "a"}, {ID: "b"}, {ID: "c"}}, queueCursor: 1}
+	m = m.moveQueueUp()
+	if m.queue[0].ID != "b" || m.queue[1].ID != "a" || m.queue[2].ID != "c" {
+		t.Fatalf("move up reordered wrong: %v", ids(m.queue))
+	}
+	if m.queueCursor != 0 {
+		t.Fatalf("cursor should follow the moved item, got %d", m.queueCursor)
+	}
+	m = m.moveQueueUp() // already at the top: no-op
+	if m.queueCursor != 0 || ids(m.queue) != "bac" {
+		t.Fatalf("move up at top should be a no-op: %v", ids(m.queue))
+	}
+}
+
+func TestQueueMoveDown(t *testing.T) {
+	m := model{queue: []video{{ID: "a"}, {ID: "b"}, {ID: "c"}}, queueCursor: 0}
+	m = m.moveQueueDown()
+	if m.queue[0].ID != "b" || m.queue[1].ID != "a" {
+		t.Fatalf("move down reordered wrong: %v", ids(m.queue))
+	}
+	if m.queueCursor != 1 {
+		t.Fatalf("cursor should follow the moved item, got %d", m.queueCursor)
+	}
+	m.queueCursor = 2
+	m = m.moveQueueDown() // already at the bottom: no-op
+	if m.queueCursor != 2 || ids(m.queue) != "bac" {
+		t.Fatalf("move down at bottom should be a no-op: %v", ids(m.queue))
+	}
+}
+
+func TestQueueRemoveClampsCursor(t *testing.T) {
+	m := model{queue: []video{{ID: "a"}, {ID: "b"}, {ID: "c"}}, queueCursor: 2}
+	m = m.removeQueueAt(2)
+	if ids(m.queue) != "ab" || m.queueCursor != 1 {
+		t.Fatalf("remove last should clamp cursor down: queue=%q cursor=%d", ids(m.queue), m.queueCursor)
+	}
+	m = m.removeQueueAt(0)
+	if ids(m.queue) != "b" || m.queueCursor != 0 {
+		t.Fatalf("remove first should keep cursor valid: queue=%q cursor=%d", ids(m.queue), m.queueCursor)
+	}
+	m = m.removeQueueAt(0)
+	if len(m.queue) != 0 || m.queueCursor != 0 {
+		t.Fatalf("remove last item should empty the queue: queue=%v cursor=%d", m.queue, m.queueCursor)
+	}
+}
+
+func TestQOpensQueueView(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{videos: []video{{ID: "a1", Title: "One"}}})
+	m = update(m, keyRunes("q"))
+	md := m.(model)
+	if md.state != queueState {
+		t.Fatalf("q should open the queue view, got state %v", md.state)
+	}
+	if !md.detailBusy["a1"] {
+		t.Fatal("opening the queue view should queue a details fetch for the selection")
+	}
+}
+
+func TestQueueViewUsesSharedPanes(t *testing.T) {
+	m := model{
+		state:       queueState,
+		width:       120,
+		height:      40,
+		proto:       protoAnsi,
+		thumbs:      make(map[string]string),
+		queue:       []video{{ID: "a1", Title: "Queued Vid", Channel: "C"}},
+		details:     map[string]videoDetail{"a1": {views: i64p(45000), uploaded: "20240115"}},
+		errMsg:      "",
+		status:      "",
+		queueCursor: 0,
+	}
+	out := m.viewQueue()
+	for _, want := range []string{"Queued Vid", "45k views", "Jan 15, 2024", "Queue · 1 videos"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("queue view missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestQueueViewMatchesResultsLayout(t *testing.T) {
+	// both pages go through the same two-pane renderer, so the preview for the
+	// same video must be identical on the two pages.
+	v := []video{{ID: "a1", Title: "T", Channel: "C"}}
+	l := computeLayout(120, 40)
+	qr := model{
+		state: queueState, width: 120, height: 40, proto: protoAnsi,
+		thumbs: make(map[string]string), queue: v, queueCursor: 0,
+	}
+	rr := model{
+		state: resultsState, width: 120, height: 40, proto: protoAnsi,
+		thumbs: make(map[string]string), filtered: v, cursor: 0,
+	}
+	// cache the same empty-art for the thumbnail so both render "no thumbnail"
+	key := thumbKey("a1", l.cols, l.rows)
+	qr.thumbs[key] = ""
+	rr.thumbs[key] = ""
+	if qr.contentPanes(l, qr.queue, 0) != rr.contentPanes(l, rr.filtered, 0) {
+		t.Fatalf("queue and results panes render differently:\nqueue:\n%s\nresults:\n%s",
+			qr.contentPanes(l, qr.queue, 0), rr.contentPanes(l, rr.filtered, 0))
+	}
+}
+
+func TestEscLeavesQueueToResults(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{videos: []video{{ID: "a1", Title: "One"}}})
+	m = update(m, keyRunes("q"))
+	m = update(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if (m.(model)).state != resultsState {
+		t.Fatalf("Esc in the queue view should return to results, got state %v", (m.(model)).state)
+	}
+}
+
+func ids(vs []video) string {
+	b := make([]byte, 0, len(vs))
+	for _, v := range vs {
+		b = append(b, v.ID...)
+	}
+	return string(b)
 }
 func kittyImageNum(t *testing.T, s string) string {
 	t.Helper()
