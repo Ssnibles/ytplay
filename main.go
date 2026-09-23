@@ -93,10 +93,13 @@ func (v video) duration() string {
 // because YouTube omits them for some videos/channels (hidden subscriber
 // counts, unlisted views, …).
 type videoDetail struct {
-	subs     *int64 // channel subscriber count
-	chViews  *int64 // total views across all the channel's videos
-	views    *int64 // views on this video
-	uploaded string // upload date, YYYYMMDD
+	subs       *int64 // channel subscriber count
+	chViews    *int64 // total views across all the channel's videos
+	views      *int64 // views on this video
+	likes      *int64 // likes on this video
+	uploaded   string // upload date, YYYYMMDD
+	channelURL string // canonical channel URL
+	channelID  string // channel id (fallback when URL is missing)
 }
 
 func (d videoDetail) date() string {
@@ -120,6 +123,9 @@ func (d videoDetail) lines(width int) []string {
 	var detail []string
 	if d.views != nil {
 		detail = append(detail, formatCount(*d.views)+" views")
+	}
+	if d.likes != nil {
+		detail = append(detail, formatCount(*d.likes)+" likes")
 	}
 	if d.date() != "" {
 		detail = append(detail, "posted "+d.date())
@@ -256,15 +262,21 @@ func detailCmd(v video) tea.Cmd {
 		}
 
 		var d struct {
-			Subs    *int64 `json:"channel_follower_count"`
-			ChViews *int64 `json:"channel_view_count"`
-			Views   *int64 `json:"view_count"`
-			Date    string `json:"upload_date"`
+			Subs       *int64 `json:"channel_follower_count"`
+			ChViews    *int64 `json:"channel_view_count"`
+			Views      *int64 `json:"view_count"`
+			Likes      *int64 `json:"like_count"`
+			Date       string `json:"upload_date"`
+			ChannelURL string `json:"channel_url"`
+			ChannelID  string `json:"channel_id"`
 		}
 		if err := json.Unmarshal(out, &d); err != nil {
 			return detailMsg{v.ID, videoDetail{}, err}
 		}
-		return detailMsg{v.ID, videoDetail{subs: d.Subs, chViews: d.ChViews, views: d.Views, uploaded: d.Date}, nil}
+		return detailMsg{v.ID, videoDetail{
+			subs: d.Subs, chViews: d.ChViews, views: d.Views, likes: d.Likes,
+			uploaded: d.Date, channelURL: d.ChannelURL, channelID: d.ChannelID,
+		}, nil}
 	}
 }
 
@@ -920,7 +932,7 @@ func (m model) viewList(l layout) string {
 		if i == m.cursor {
 			marker = "▌"
 		}
-		line := marker + " " + truncate(v.Title, l.leftW-4)
+		line := marker + " " + listRow(v, l.leftW-4)
 		if i == m.cursor {
 			line = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(line)
 		} else {
@@ -1002,6 +1014,24 @@ func (m model) viewPreview(l layout) string {
 		Height(l.midH).
 		Padding(0, 1)
 	return style.Render(body.String())
+}
+
+// listRow lays out a list entry with the duration right-aligned: the title is
+// truncated to leave room for a timestamp, and the row is exactly width runes.
+func listRow(v video, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	dur := v.duration()
+	if dur == "?:??" || width < len(dur)+3 {
+		return truncate(v.Title, width)
+	}
+	title := truncate(v.Title, width-len(dur)-1)
+	pad := width - len([]rune(title)) - len(dur)
+	if pad < 0 {
+		pad = 0
+	}
+	return title + strings.Repeat(" ", pad) + dur
 }
 
 // truncate clips s to n runes.

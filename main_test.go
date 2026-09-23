@@ -457,10 +457,11 @@ func TestVideoDetailLines(t *testing.T) {
 		subs:     i64p(1234567),
 		chViews:  i64p(85000000),
 		views:    i64p(45000),
+		likes:    i64p(1800),
 		uploaded: "20240115",
 	}
 	lines := d.lines(60)
-	want := []string{"1.2M subscribers", "85M total channel views", "45k views · posted Jan 15, 2024"}
+	want := []string{"1.2M subscribers", "85M total channel views", "45k views · 1.8k likes · posted Jan 15, 2024"}
 	if len(lines) != len(want) {
 		t.Fatalf("want %d lines, got %d: %v", len(want), len(lines), lines)
 	}
@@ -476,6 +477,28 @@ func TestVideoDetailLines(t *testing.T) {
 	d2 := videoDetail{uploaded: "20200821"}
 	if got := d2.lines(60); len(got) != 1 || !strings.Contains(got[0], "Aug 21, 2020") {
 		t.Errorf("date-only detail = %v", got)
+	}
+}
+
+func TestListRow(t *testing.T) {
+	p := func(d float64) *float64 { return &d }
+	cases := []struct {
+		name  string
+		title string
+		dur   *float64
+		width int
+		want  string
+	}{
+		{"duration right-aligned", "some video title here", p(455.0), 20, "some video tit… 7:35"},
+		{"short title padded", "a", p(100), 10, "a     1:40"},
+		{"no duration", "short", nil, 10, "short"},
+		{"narrow leaves no room", "full title here", p(100), 6, "full …"},
+	}
+	for _, c := range cases {
+		v := video{Title: c.title, Duration: c.dur}
+		if got := listRow(v, c.width); got != c.want {
+			t.Errorf("%s: listRow = %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 
