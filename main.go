@@ -49,6 +49,9 @@ const detailLines = 3
 // next few means scrolling into a neighbour usually finds them cached.
 const detailLookahead = 3
 
+const maxDetails = 512
+const maxThumbs = 64
+
 // ---- video ---------------------------------------------------------------
 
 type video struct {
@@ -662,6 +665,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case thumbMsg:
 		key := thumbKey(msg.id, msg.cols, msg.rows)
 		m.thumbBusy[key] = false
+		if len(m.thumbs)+1 > maxThumbs {
+			for k := range m.thumbs {
+				delete(m.thumbs, k)
+				delete(m.thumbBusy, k)
+				break
+			}
+		}
 		if msg.err != nil {
 			// Empty art marks a failed render; viewPreview shows a friendly
 			// "no thumbnail" hint instead of caching a multi-line string.
@@ -672,6 +682,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case detailMsg:
 		m.detailBusy[msg.id] = false
+		if len(m.details)+1 > maxDetails {
+			for id := range m.details {
+				delete(m.details, id)
+				delete(m.detailBusy, id)
+				break
+			}
+		}
 		if msg.err != nil {
 			// Cache an empty detail so a video whose extractor fails isn't
 			// re-fetched on every selection change.
@@ -791,8 +808,20 @@ func thumbDims(rightW, midH int) (cols, rows int, ok bool) {
 }
 
 func playInMPV(v video) error {
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		return fmt.Errorf("mpv: %w", err)
+	}
+	defer devnull.Close()
+
 	cmd := exec.Command("mpv", v.watchURL())
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Detach mpv from the TUI's streams: stdin would otherwise receive the
+	// keystrokes the TUI is listening for, and mpv's own output would print
+	// into the alternate screen and desync the cell-anchored image layout.
+	cmd.Stdin = devnull
+	cmd.Stdout = devnull
+	cmd.Stderr = devnull
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("mpv: %w", err)
 	}

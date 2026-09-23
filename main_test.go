@@ -479,6 +479,24 @@ func TestVideoDetailLines(t *testing.T) {
 	}
 }
 
+func TestDetailCacheIsCapped(t *testing.T) {
+	m := model{
+		state:      resultsState,
+		details:    make(map[string]videoDetail),
+		detailBusy: make(map[string]bool),
+	}
+	for i := 0; i < maxDetails+100; i++ {
+		_, cmd := m.Update(detailMsg{id: fmt.Sprintf("v%03d", i), det: videoDetail{views: i64p(int64(i))}})
+		_ = cmd
+	}
+	if got := len(m.details); got > maxDetails {
+		t.Fatalf("details cache exceeded cap: got %d entries, cap %d", got, maxDetails)
+	}
+	if got := len(m.detailBusy); got > maxDetails {
+		t.Fatalf("detail busy map exceeded cap: got %d entries, cap %d", got, maxDetails)
+	}
+}
+
 func TestDetailFetchAndCache(t *testing.T) {
 	m := tea.Model(initialModel(nil))
 	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
