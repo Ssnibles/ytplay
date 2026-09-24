@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -488,6 +489,81 @@ func TestSlashAlwaysOpensSearch(t *testing.T) {
 	m = update(m, tea.KeyMsg{Type: tea.KeyEsc})
 	if (m.(model)).state != queueState {
 		t.Fatalf("Esc after / should return to queue, got %v", (m.(model)).state)
+	}
+}
+
+func TestSlashSearchChangeDoesNotFreeze(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{videos: []video{{ID: "v1", Title: "Old Search Video"}}})
+
+	// 1. Press / to change search
+	m = update(m, keyRunes("/"))
+	if (m.(model)).state != promptState {
+		t.Fatalf("/ should open prompt, got %v", (m.(model)).state)
+	}
+
+	// 2. Type new search query
+	for _, r := range "veritasium" {
+		m = update(m, keyRunes(string(r)))
+	}
+	if (m.(model)).input.Value() != "veritasium" {
+		t.Fatalf("expected input value 'veritasium', got %q", (m.(model)).input.Value())
+	}
+
+	// 3. Press Enter to search
+	m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if (m.(model)).state != searchingState {
+		t.Fatalf("Enter in prompt should transition to searchingState, got %v", (m.(model)).state)
+	}
+
+	// 4. While searching, WindowSizeMsg and TickMsg should not fork-bomb or crash
+	m = update(m, tea.WindowSizeMsg{Width: 100, Height: 35})
+	m = update(m, spinner.TickMsg{})
+	if (m.(model)).width != 100 || (m.(model)).height != 35 {
+		t.Fatalf("expected resized width 100, height 35, got %dx%d", (m.(model)).width, (m.(model)).height)
+	}
+
+	// 5. Search completes and delivers results
+	m = update(m, searchMsg{
+		query: "veritasium",
+		videos: []video{
+			{ID: "c1", Title: "Veritasium Channel", IEKey: "YoutubeTab"},
+			{ID: "v2", Title: "Speed of light"},
+			{ID: "v3", Title: "Math video"},
+		},
+	})
+	md := m.(model)
+	if md.state != resultsState {
+		t.Fatalf("expected resultsState after searchMsg, got %v", md.state)
+	}
+	if md.cursor != 0 {
+		t.Fatalf("expected cursor at 0, got %d", md.cursor)
+	}
+
+	// 6. Navigation and interactions work seamlessly without freezing
+	m = update(m, keyRunes("j"))
+	if (m.(model)).cursor != 1 {
+		t.Fatalf("expected cursor 1 after 'j', got %d", (m.(model)).cursor)
+	}
+	m = update(m, keyRunes("k"))
+	if (m.(model)).cursor != 0 {
+		t.Fatalf("expected cursor 0 after 'k', got %d", (m.(model)).cursor)
+	}
+
+	// 7. Window resize in results works cleanly
+	m = update(m, tea.WindowSizeMsg{Width: 140, Height: 50})
+	if (m.(model)).width != 140 || (m.(model)).height != 50 {
+		t.Fatalf("expected resized width 140, height 50, got %dx%d", (m.(model)).width, (m.(model)).height)
+	}
+
+	// 8. Esc returns back to the previous search results
+	m = update(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if (m.(model)).state != resultsState {
+		t.Fatalf("expected Esc to return to previous resultsState, got %v", (m.(model)).state)
+	}
+	if len((m.(model)).filtered) != 1 || (m.(model)).filtered[0].ID != "v1" {
+		t.Fatalf("expected previous search results restored, got %v", (m.(model)).filtered)
 	}
 }
 

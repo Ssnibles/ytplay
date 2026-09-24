@@ -12,7 +12,7 @@ func (m model) Init() tea.Cmd {
 	// The input is focused on the model the update loop runs (set in
 	// initialModel). Init runs on a copy, so focusing here would be lost.
 	if m.state == searchingState {
-		return searchCmd(m.query, searchResults, false)
+		return tea.Batch(m.spin.Tick, searchCmd(m.query, searchResults, false))
 	}
 	return nil
 }
@@ -59,10 +59,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case spinner.TickMsg:
-		var cmd tea.Cmd
-		m.spin, cmd = m.spin.Update(msg)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
+		if m.state == searchingState || (m.state == channelState && m.channelLoading) {
+			var cmd tea.Cmd
+			m.spin, cmd = m.spin.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 		}
 
 	case thumbMsg:
@@ -85,10 +87,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if m.state == searchingState || (m.state == channelState && m.channelLoading) {
-		cmds = append(cmds, m.spin.Tick)
-	}
-
 	return m, tea.Batch(cmds...)
 }
 
@@ -104,7 +102,7 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) (model, tea.Cmd) {
 	if m.state == queueState && len(m.queue) > 0 {
 		return m, m.loadSelectionFor(m.queue, m.queueCursor)
 	}
-	if len(m.filtered) > 0 {
+	if m.state == resultsState && len(m.filtered) > 0 {
 		return m, m.loadSelection()
 	}
 	return m, nil
@@ -151,11 +149,10 @@ func (m model) handlePromptKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		if q == "" {
 			return m, nil
 		}
-		m = m.pushNav()
 		m.query = q
 		m = m.rememberQuery(q)
 		m.state = searchingState
-		return m, searchCmd(q, searchResults, false)
+		return m, tea.Batch(m.spin.Tick, searchCmd(q, searchResults, false))
 	default:
 		m.histIdx = -1
 		m.pending = ""
@@ -211,6 +208,7 @@ func (m model) handleQueueKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		case "/":
 			m = m.pushNav()
 			m.state = promptState
+			m.input.SetValue("")
 			m.input.Focus()
 			m.errMsg = ""
 			m.status = ""
@@ -325,6 +323,7 @@ func (m model) handleResultsKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		case "/":
 			m = m.pushNav()
 			m.state = promptState
+			m.input.SetValue("")
 			m.input.Focus()
 			m.errMsg = ""
 			m.status = ""
@@ -414,7 +413,7 @@ func (m model) openChannelView(v video) (model, tea.Cmd) {
 	m.errMsg = ""
 	m.status = "Loading channel " + chTitle + "…"
 
-	return m, channelCmd(chTitle, chURL, searchResults, false)
+	return m, tea.Batch(m.spin.Tick, channelCmd(chTitle, chURL, searchResults, false))
 }
 
 func (m model) handleChannelKey(msg tea.KeyMsg) (model, tea.Cmd) {
@@ -472,6 +471,7 @@ func (m model) handleChannelKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		case "/":
 			m = m.pushNav()
 			m.state = promptState
+			m.input.SetValue("")
 			m.input.Focus()
 			m.errMsg = ""
 			m.status = ""
@@ -534,6 +534,9 @@ func (m model) shouldLoadMoreChannel() bool {
 func (m model) handleChannelMsg(msg channelMsg) (model, tea.Cmd) {
 	m.channelLoading = false
 	m.channelFetchingMore = false
+	if msg.channelURL != "" && m.channelURL != "" && msg.channelURL != m.channelURL {
+		return m, nil
+	}
 	if msg.err != nil {
 		if !msg.more {
 			m.errMsg = msg.err.Error()
@@ -562,6 +565,9 @@ func (m model) handleChannelMsg(msg channelMsg) (model, tea.Cmd) {
 
 func (m model) handleSearchMsg(msg searchMsg) (model, tea.Cmd) {
 	m.fetchingMore = false
+	if msg.query != "" && m.query != "" && msg.query != m.query {
+		return m, nil
+	}
 	if msg.err != nil {
 		m.errMsg = msg.err.Error()
 		if !msg.more {

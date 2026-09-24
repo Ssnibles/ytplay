@@ -19,6 +19,7 @@ import (
 // query with a larger limit and is merged onto the results already shown, so
 // scrolling can page deeper into the channel the way a web search does.
 type searchMsg struct {
+	query  string
 	videos []video
 	err    error
 	limit  int
@@ -104,7 +105,7 @@ func searchCmd(query string, limit int, more bool) tea.Cmd {
 				"-J", fmt.Sprintf("ytsearch%d:%s", limit, query))
 			out, err = cmd.Output()
 			if err != nil {
-				return searchMsg{err: fmt.Errorf("yt-dlp: %w", err), limit: limit, more: more}
+				return searchMsg{query: query, err: fmt.Errorf("yt-dlp: %w", err), limit: limit, more: more}
 			}
 		}
 
@@ -112,7 +113,7 @@ func searchCmd(query string, limit int, more bool) tea.Cmd {
 			Entries []video `json:"entries"`
 		}
 		if err := json.Unmarshal(out, &res); err != nil {
-			return searchMsg{err: fmt.Errorf("parse: %w", err), limit: limit, more: more}
+			return searchMsg{query: query, err: fmt.Errorf("parse: %w", err), limit: limit, more: more}
 		}
 
 		videos := make([]video, 0, len(res.Entries))
@@ -129,11 +130,11 @@ func searchCmd(query string, limit int, more bool) tea.Cmd {
 			// a follow-up page hitting the end comes back empty — that's not
 			// an error, it just means there is nothing more to load.
 			if more {
-				return searchMsg{limit: limit, more: more}
+				return searchMsg{query: query, limit: limit, more: more}
 			}
-			return searchMsg{err: fmt.Errorf("no results"), limit: limit, more: more}
+			return searchMsg{query: query, err: fmt.Errorf("no results"), limit: limit, more: more}
 		}
-		return searchMsg{videos: videos, limit: limit, more: more}
+		return searchMsg{query: query, videos: videos, limit: limit, more: more}
 	}
 }
 
