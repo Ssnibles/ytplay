@@ -7,11 +7,13 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/blacktop/go-termimg"
+	"github.com/charmbracelet/x/mosaic"
 )
 
 // imgProto is the terminal image protocol selected at startup.
@@ -105,17 +107,73 @@ func renderThumb(v video, cols, rows int, proto imgProto) (string, error) {
 //     positions for the image, but no characters written into its cells (spaces
 //     would overwrite sixel pixels).
 //   - ansi: half-block pixel art, returned as-is.
+// tightThumbDims calculates the exact (cols, rows) in terminal cells that
+// img will occupy when scaled to fit within maxCols x maxRows while preserving
+// aspect ratio, avoiding empty letterboxing rows or columns. Terminal cells
+// have a standard 1:2 (w:h) aspect ratio (each cell is twice as tall as it is wide).
+func tightThumbDims(img image.Image, maxCols, maxRows int) (int, int) {
+	if maxCols <= 0 || maxRows <= 0 {
+		return 0, 0
+	}
+	srcW := img.Bounds().Dx()
+	srcH := img.Bounds().Dy()
+	if srcW <= 0 || srcH <= 0 {
+		return maxCols, maxRows
+	}
+
+	// In 1:2 cell coordinates, max bounding box corresponds to maxCols width
+	// and maxRows*2 height in square units.
+	maxPixW := float64(maxCols)
+	maxPixH := float64(maxRows * 2)
+
+	ratioW := maxPixW / float64(srcW)
+	ratioH := maxPixH / float64(srcH)
+	ratio := min(ratioW, ratioH)
+
+	scaledW := float64(srcW) * ratio
+	scaledH := float64(srcH) * ratio
+
+	fitCols := int(math.Round(scaledW))
+	fitRows := int(math.Round(scaledH / 2.0))
+
+	if fitCols < 1 {
+		fitCols = 1
+	}
+	if fitCols > maxCols {
+		fitCols = maxCols
+	}
+	if fitRows < 1 {
+		fitRows = 1
+	}
+	if fitRows > maxRows {
+		fitRows = maxRows
+	}
+	return fitCols, fitRows
+}
+
 func renderThumbData(img image.Image, cols, rows int, proto imgProto) (string, error) {
+	fitCols, fitRows := tightThumbDims(img, cols, rows)
+	if fitCols <= 0 || fitRows <= 0 {
+		return "", fmt.Errorf("invalid thumb dimensions")
+	}
+
 	// go-termimg's ResizeImage keeps a global LRU cache keyed by (target size,
 	// path, source size). Every YouTube thumbnail is the same size and path, so
 	// all videos would collide on one cache entry and render as the first image
 	// ever resized — bust it each call (we cache the finished blocks ourselves
 	// in m.thumbs instead).
 	termimg.ClearResizeCache()
+
+	if proto == protoAnsi {
+		m := mosaic.New().Width(fitCols * 2).Height(fitRows * 2)
+		out := m.Render(img)
+		return strings.TrimRight(out, "\n"), nil
+	}
+
 	ti := termimg.New(img).
 		Protocol(proto.protocol()).
-		Width(cols).
-		Height(rows).
+		Width(fitCols).
+		Height(fitRows).
 		Scale(termimg.ScaleFit).
 		PNG(true)
 	if proto == protoKitty {
@@ -126,7 +184,7 @@ func renderThumbData(img image.Image, cols, rows int, proto imgProto) (string, e
 		return "", err
 	}
 	if proto == protoSixel {
-		return out + strings.Repeat("\n", rows-1), nil
+		return out + strings.Repeat("\n", fitRows-1), nil
 	}
 	return out, nil
 }

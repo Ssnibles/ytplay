@@ -348,15 +348,20 @@ func (m model) viewPreview(l layout, videos []video, cursor int) string {
 	}
 	if ok {
 		linesInBody := strings.Count(body.String(), "\n") + 1
-		availDetail := (l.midH - 2) - linesInBody - 1
+		availDetail := (l.midH - 2) - linesInBody - 2
+		gap := "\n\n"
+		if availDetail <= 0 {
+			availDetail = (l.midH - 2) - linesInBody - 1
+			gap = "\n"
+		}
 		if availDetail > 0 {
 			if lines := d.lines(w, availDetail, m.descScroll); len(lines) > 0 {
-				body.WriteString("\n")
+				body.WriteString(gap)
 				body.WriteString(strings.Join(lines, "\n"))
 			}
 		}
 	} else if m.detailBusy[v.ID] {
-		body.WriteString("\n" + hint("loading details…", w))
+		body.WriteString("\n\n" + hint("loading details…", w))
 	}
 
 	return boxStyle.Width(l.rightW - 2).Height(l.midH - 2).Render(body.String())
