@@ -633,7 +633,17 @@ func (m model) handleDetailMsg(msg detailMsg) model {
 	if msg.err != nil {
 		// Cache an empty detail so a video whose extractor fails isn't
 		// re-fetched on every selection change.
-		m.details[msg.id] = videoDetail{}
+		// If it's a channel with fallback search data, preserve the fallback.
+		if v, ok := m.findVideo(msg.id); ok && v.isChannel() && (v.Followers != nil || v.Description != "") {
+			m.details[msg.id] = videoDetail{
+				subs:        v.Followers,
+				channelURL:  v.channelTargetURL(),
+				channelID:   v.ChannelID,
+				description: v.Description,
+			}
+		} else {
+			m.details[msg.id] = videoDetail{}
+		}
 		return m
 	}
 	m.details[msg.id] = msg.det
@@ -684,7 +694,8 @@ func (m model) loadThumbFor(videos []video, cursor int) tea.Cmd {
 		return nil
 	}
 	v := videos[cursor]
-	key := thumbKey(v.ID, l.cols, l.rows)
+	cols, rows := previewThumbDims(v, l)
+	key := thumbKey(v.ID, cols, rows)
 	if _, cached := m.thumbs[key]; cached {
 		return nil
 	}
@@ -692,7 +703,7 @@ func (m model) loadThumbFor(videos []video, cursor int) tea.Cmd {
 		return nil
 	}
 	m.thumbBusy[key] = true
-	return thumbCmd(v, l.cols, l.rows, m.proto)
+	return thumbCmd(v, cols, rows, m.proto)
 }
 
 // loadSelection issues whatever the selected video still needs fetched: its
@@ -736,15 +747,6 @@ func (m model) loadDetailFor(v video) tea.Cmd {
 		return nil
 	}
 	if m.detailBusy[v.ID] {
-		return nil
-	}
-	if v.isChannel() && (v.Followers != nil || v.Description != "") {
-		m.details[v.ID] = videoDetail{
-			subs:        v.Followers,
-			channelURL:  v.channelTargetURL(),
-			channelID:   v.ChannelID,
-			description: v.Description,
-		}
 		return nil
 	}
 	m.detailBusy[v.ID] = true

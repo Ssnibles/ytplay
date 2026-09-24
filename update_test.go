@@ -324,6 +324,34 @@ func TestDetailFetchAndCache(t *testing.T) {
 	}
 }
 
+func TestChannelDetailLoadsEvenWithSearchFallback(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	ch := video{
+		ID:          "UC123",
+		Title:       "Linus Tech Tips",
+		IEKey:       "YoutubeTab",
+		Followers:   i64p(16900000),
+		Description: "Short snippet...",
+	}
+	m = update(m, searchMsg{
+		videos: []video{ch},
+		limit:  searchResults,
+	})
+
+	md := m.(model)
+	if !md.detailBusy["UC123"] {
+		t.Fatal("selecting a channel with fallback search snippet should still queue detail fetch")
+	}
+
+	fullDesc := "Full description paragraph 1\n\nFull description paragraph 2"
+	m = update(m, detailMsg{id: "UC123", det: videoDetail{subs: ch.Followers, description: fullDesc}})
+	md = m.(model)
+	if md.details["UC123"].description != fullDesc {
+		t.Fatalf("channel detail should be updated to full description, got %q", md.details["UC123"].description)
+	}
+}
+
 func TestCopyKeyQueuesCommand(t *testing.T) {
 	m := tea.Model(initialModel(nil))
 	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})

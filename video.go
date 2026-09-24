@@ -61,8 +61,14 @@ func (v video) channelTargetURL() string {
 	if v.ChannelID != "" {
 		return "https://www.youtube.com/channel/" + v.ChannelID
 	}
-	if strings.Contains(v.URL, "/channel/") || strings.Contains(v.URL, "/@") {
+	if strings.Contains(v.URL, "/channel/") || strings.Contains(v.URL, "/@") || strings.Contains(v.URL, "/c/") || strings.Contains(v.URL, "/user/") {
 		return v.URL
+	}
+	if v.URL != "" && strings.HasPrefix(v.URL, "http") {
+		return v.URL
+	}
+	if strings.HasPrefix(v.ID, "UC") {
+		return "https://www.youtube.com/channel/" + v.ID
 	}
 	return ""
 }
@@ -142,9 +148,77 @@ func (d videoDetail) channelLink() string {
 	return ""
 }
 
-// lines renders the stats as up to detailLines rows, combining views and post
-// date on one line. Unknown fields are skipped.
-func (d videoDetail) lines(width int) []string {
+// wrapText wraps s into lines of at most width runes, breaking on spaces.
+// Consecutive blank lines are collapsed into a single blank line.
+func wrapText(s string, width int) []string {
+	if width <= 0 {
+		return nil
+	}
+	var out []string
+	rawLines := strings.Split(s, "\n")
+	lastWasBlank := false
+	for _, raw := range rawLines {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			if len(out) > 0 && !lastWasBlank {
+				out = append(out, "")
+				lastWasBlank = true
+			}
+			continue
+		}
+		lastWasBlank = false
+		words := strings.Fields(raw)
+		if len(words) == 0 {
+			continue
+		}
+		var cur strings.Builder
+		curLen := 0
+		for _, w := range words {
+			wLen := len([]rune(w))
+			if curLen == 0 {
+				for wLen > width {
+					out = append(out, string([]rune(w)[:width]))
+					w = string([]rune(w)[width:])
+					wLen = len([]rune(w))
+				}
+				cur.WriteString(w)
+				curLen = wLen
+			} else if curLen+1+wLen <= width {
+				cur.WriteString(" ")
+				cur.WriteString(w)
+				curLen += 1 + wLen
+			} else {
+				out = append(out, cur.String())
+				cur.Reset()
+				for wLen > width {
+					out = append(out, string([]rune(w)[:width]))
+					w = string([]rune(w)[width:])
+					wLen = len([]rune(w))
+				}
+				cur.WriteString(w)
+				curLen = wLen
+			}
+		}
+		if curLen > 0 {
+			out = append(out, cur.String())
+		}
+	}
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
+	}
+	return out
+}
+
+// lines renders the stats as up to maxLines rows, combining views and post
+// date on one line and wrapping channel descriptions over lines. Unknown fields are skipped.
+func (d videoDetail) lines(width int, maxLines ...int) []string {
+	limit := detailLines
+	if len(maxLines) > 0 {
+		limit = maxLines[0]
+	}
+	if limit <= 0 {
+		return nil
+	}
 	var out []string
 	if d.subs != nil {
 		out = append(out, hint(formatCount(*d.subs)+" subscribers", width))
@@ -166,14 +240,24 @@ func (d videoDetail) lines(width int) []string {
 		out = append(out, hint(strings.Join(detail, " · "), width))
 	}
 	if d.description != "" {
-		for _, ln := range strings.Split(d.description, "\n") {
-			ln = strings.TrimSpace(ln)
-			if ln != "" {
+		for _, ln := range wrapText(d.description, width) {
+			if len(out) >= limit {
+				break
+			}
+			if ln == "" {
+				out = append(out, "")
+			} else {
 				out = append(out, hint(ln, width))
 			}
 		}
 	}
-	return out[:min(len(out), detailLines)]
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
 }
 
 // formatCount renders a view/subscriber count compactly: 999, 1.2k, 45k, 1.5M.

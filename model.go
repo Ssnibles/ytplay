@@ -155,3 +155,22 @@ func initialModel(args []string) model {
 	}
 	return m
 }
+
+func (m model) findVideo(id string) (video, bool) {
+	for _, v := range m.filtered {
+		if v.ID == id {
+			return v, true
+		}
+	}
+	for _, v := range m.channelVideos {
+		if v.ID == id {
+			return v, true
+		}
+	}
+	for _, v := range m.queue {
+		if v.ID == id {
+			return v, true
+		}
+	}
+	return video{}, false
+}

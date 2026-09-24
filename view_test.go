@@ -47,6 +47,29 @@ func TestPreviewShowsDetails(t *testing.T) {
 	}
 }
 
+func TestChannelPreviewShowsFullWrappedDescription(t *testing.T) {
+	desc := "Linus Tech Tips is a passionate team of experts in consumer technology and video production.\n\nSponsorship Inquiries: partnerships@linusmediagroup.com"
+	m := model{
+		state:    resultsState,
+		width:    80,
+		height:   24,
+		proto:    protoAnsi,
+		thumbs:   make(map[string]string),
+		filtered: []video{{ID: "UC123", Title: "Linus Tech Tips", IEKey: "YoutubeTab"}},
+		details: map[string]videoDetail{"UC123": {
+			subs:        i64p(16900000),
+			description: desc,
+		}},
+	}
+	l := computeLayout(80, 24)
+	out := m.viewPreview(l, m.filtered, 0)
+	for _, want := range []string{"16.9M subscribers", "Linus Tech Tips is a passionate", "partnerships@linusmediagroup.com"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("preview missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestQueueViewUsesSharedPanes(t *testing.T) {
 	m := model{
 		state:       queueState,

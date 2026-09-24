@@ -195,10 +195,18 @@ func detailCmd(v video) tea.Cmd {
 		if err := json.Unmarshal(out, &d); err != nil {
 			return detailMsg{v.ID, videoDetail{}, err}
 		}
+		desc := d.Description
+		if desc == "" {
+			desc = v.Description
+		}
+		subs := d.Subs
+		if subs == nil {
+			subs = v.Followers
+		}
 		return detailMsg{v.ID, videoDetail{
-			subs: d.Subs, chViews: d.ChViews, views: d.Views, likes: d.Likes,
+			subs: subs, chViews: d.ChViews, views: d.Views, likes: d.Likes,
 			uploaded: d.Date, channelURL: d.ChannelURL, channelID: d.ChannelID,
-			description: d.Description,
+			description: desc,
 		}, nil}
 	}
 }

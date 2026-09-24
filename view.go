@@ -254,6 +254,20 @@ func hint(s string, width int) string {
 	return greyHintStyle.Render(truncate(s, width))
 }
 
+// previewThumbDims returns thumbnail cell dimensions for the given video.
+// Channel avatars are square profile pictures, so they need far fewer rows
+// than a 16:9 video thumbnail, leaving ample room for the channel description.
+func previewThumbDims(v video, l layout) (cols, rows int) {
+	if v.isChannel() {
+		rows = l.rows
+		if rows > 6 {
+			rows = 6
+		}
+		return rows * 2, rows
+	}
+	return l.cols, l.rows
+}
+
 func (m model) viewPreview(l layout, videos []video, cursor int) string {
 	if len(videos) == 0 {
 		return lipgloss.NewStyle().Width(l.rightW).Height(l.midH - 2).Render("")
@@ -283,7 +297,8 @@ func (m model) viewPreview(l layout, videos []video, cursor int) string {
 	}
 	body.WriteString("\n\n")
 
-	key := thumbKey(v.ID, l.cols, l.rows)
+	cols, rows := previewThumbDims(v, l)
+	key := thumbKey(v.ID, cols, rows)
 	if !l.thumbOK {
 		body.WriteString(hint("terminal too small for a thumbnail", w))
 	} else if art, ok := m.thumbs[key]; ok {
@@ -313,10 +328,24 @@ func (m model) viewPreview(l layout, videos []video, cursor int) string {
 	}
 
 	// channel & video stats below the thumbnail
-	if d, ok := m.details[v.ID]; ok {
-		if lines := d.lines(w); len(lines) > 0 {
-			body.WriteString("\n")
-			body.WriteString(strings.Join(lines, "\n"))
+	d, ok := m.details[v.ID]
+	if !ok && v.isChannel() && (v.Followers != nil || v.Description != "") {
+		d = videoDetail{
+			subs:        v.Followers,
+			channelURL:  v.channelTargetURL(),
+			channelID:   v.ChannelID,
+			description: v.Description,
+		}
+		ok = true
+	}
+	if ok {
+		linesInBody := strings.Count(body.String(), "\n") + 1
+		availDetail := (l.midH - 2) - linesInBody - 1
+		if availDetail > 0 {
+			if lines := d.lines(w, availDetail); len(lines) > 0 {
+				body.WriteString("\n")
+				body.WriteString(strings.Join(lines, "\n"))
+			}
 		}
 	} else if m.detailBusy[v.ID] {
 		body.WriteString("\n" + hint("loading details…", w))

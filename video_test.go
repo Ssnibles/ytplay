@@ -134,16 +134,68 @@ func TestThumbURL(t *testing.T) {
 func TestChannelDetailLines(t *testing.T) {
 	d := videoDetail{
 		subs:        i64p(21300000),
-		description: "Tech reviews and gadgets\nNYC",
+		description: "MKBHD: Quality Tech Videos | YouTuber | Geek | Consumer Electronics | Tech Head | Internet Personality!\n\nbusiness@MKBHD.com\n\nNYC",
 	}
-	lines := d.lines(60)
-	if len(lines) < 2 {
-		t.Fatalf("expected at least 2 lines, got %d: %v", len(lines), lines)
+	// With width 30 and maxLines 8, the multi-line description wraps across multiple lines
+	// and preserves paragraph separation.
+	lines := d.lines(30, 8)
+	if len(lines) < 5 {
+		t.Fatalf("expected description to wrap to at least 5 lines, got %d: %v", len(lines), lines)
 	}
 	if !strings.Contains(lines[0], "21.3M subscribers") {
 		t.Errorf("line 0 = %q, want subscriber count", lines[0])
 	}
-	if !strings.Contains(lines[1], "Tech reviews and gadgets") {
-		t.Errorf("line 1 = %q, want description", lines[1])
+	// Line 1 should be the first wrapped chunk, not truncated with ellipsis
+	if strings.Contains(lines[1], "…") {
+		t.Errorf("line 1 should wrap over to the next line rather than being cut off with ellipsis: %q", lines[1])
+	}
+	foundEmail := false
+	for _, ln := range lines {
+		if strings.Contains(ln, "business@MKBHD.com") {
+			foundEmail = true
+			break
+		}
+	}
+	if !foundEmail {
+		t.Errorf("expected multi-line description to include later paragraphs (business@MKBHD.com): %v", lines)
 	}
 }
+
+func TestPreviewThumbDims(t *testing.T) {
+	l := layout{cols: 40, rows: 20}
+	vChannel := video{ID: "ch1", IEKey: "YoutubeTab"}
+	cols, rows := previewThumbDims(vChannel, l)
+	if rows != 6 || cols != 12 {
+		t.Fatalf("channel thumb dims: got %dx%d, want 12x6", cols, rows)
+	}
+
+	vVideo := video{ID: "vid1"}
+	cols, rows = previewThumbDims(vVideo, l)
+	if rows != 20 || cols != 40 {
+		t.Fatalf("video thumb dims: got %dx%d, want 40x20", cols, rows)
+	}
+}
+
+func TestWrapText(t *testing.T) {
+	text := "The quick brown fox jumps over the lazy dog"
+	wrapped := wrapText(text, 15)
+	if len(wrapped) != 3 {
+		t.Fatalf("expected 3 wrapped lines, got %d: %v", len(wrapped), wrapped)
+	}
+	for i, ln := range wrapped {
+		if len([]rune(ln)) > 15 {
+			t.Errorf("line %d length %d > 15: %q", i, len([]rune(ln)), ln)
+		}
+	}
+	if wrapped[0] != "The quick brown" || wrapped[1] != "fox jumps over" || wrapped[2] != "the lazy dog" {
+		t.Errorf("unexpected wrap result: %v", wrapped)
+	}
+
+	// Test multi-line and paragraph handling
+	multi := "First paragraph here.\n\nSecond paragraph here."
+	wMulti := wrapText(multi, 40)
+	if len(wMulti) != 3 || wMulti[0] != "First paragraph here." || wMulti[1] != "" || wMulti[2] != "Second paragraph here." {
+		t.Fatalf("multi-line paragraph wrapping failed: got %v", wMulti)
+	}
+}
+
