@@ -65,6 +65,40 @@ func TestMergeResultsEdgeCases(t *testing.T) {
 	}
 }
 
+func TestPrioritizeChannels(t *testing.T) {
+	v1 := video{ID: "v1", Title: "Video 1"}
+	v2 := video{ID: "v2", Title: "Video 2"}
+	c1 := video{ID: "UC111", Title: "Channel 1", IEKey: "YoutubeTab"}
+	c2 := video{ID: "UC222", Title: "Channel 2", URL: "https://www.youtube.com/@c2"}
+
+	// 1. Channel at end moves to front
+	input := []video{v1, v2, c1}
+	got := prioritizeChannels(input)
+	if len(got) != 3 || got[0].ID != "UC111" || got[1].ID != "v1" || got[2].ID != "v2" {
+		t.Fatalf("channel not prioritized first: %v", got)
+	}
+
+	// 2. Multiple channels stay in relative order and come before videos
+	input = []video{v1, c1, v2, c2}
+	got = prioritizeChannels(input)
+	if len(got) != 4 || got[0].ID != "UC111" || got[1].ID != "UC222" || got[2].ID != "v1" || got[3].ID != "v2" {
+		t.Fatalf("multiple channels not prioritized properly: %v", got)
+	}
+
+	// 3. No channels leaves slice unchanged
+	input = []video{v1, v2}
+	got = prioritizeChannels(input)
+	if len(got) != 2 || got[0].ID != "v1" || got[1].ID != "v2" {
+		t.Fatalf("slice without channels modified: %v", got)
+	}
+
+	// 4. Merge results pulls channel from extra to the very front
+	merged := mergeResults([]video{v1, v2}, []video{c1})
+	if len(merged) != 3 || merged[0].ID != "UC111" {
+		t.Fatalf("merge did not prioritize channel: %v", merged)
+	}
+}
+
 func TestChannelVideosURL(t *testing.T) {
 	cases := []struct {
 		in   string

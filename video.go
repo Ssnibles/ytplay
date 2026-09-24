@@ -8,20 +8,45 @@ import (
 	"time"
 )
 
+type thumbInfo struct {
+	URL string `json:"url"`
+}
+
 type video struct {
-	ID         string   `json:"id"`
-	Title      string   `json:"title"`
-	URL        string   `json:"url"`
-	Channel    string   `json:"channel"`
-	Uploader   string   `json:"uploader"`
-	Duration   *float64 `json:"duration"`
-	ChannelID  string   `json:"channel_id"`
-	ChannelURL string   `json:"channel_url"`
-	IEKey      string   `json:"ie_key"`
+	ID         string      `json:"id"`
+	Title      string      `json:"title"`
+	URL        string      `json:"url"`
+	Channel    string      `json:"channel"`
+	Uploader   string      `json:"uploader"`
+	Duration   *float64    `json:"duration"`
+	ChannelID  string      `json:"channel_id"`
+	ChannelURL string      `json:"channel_url"`
+	IEKey      string      `json:"ie_key"`
+	Thumbnails []thumbInfo `json:"thumbnails"`
+}
+
+func (v video) thumbURL() string {
+	if len(v.Thumbnails) > 0 {
+		best := v.Thumbnails[len(v.Thumbnails)-1].URL
+		if strings.HasPrefix(best, "//") {
+			return "https:" + best
+		}
+		return best
+	}
+	return fmt.Sprintf("https://i.ytimg.com/vi/%s/mqdefault.jpg", v.ID)
 }
 
 func (v video) isChannel() bool {
-	return v.IEKey == "YoutubeTab" || (strings.HasPrefix(v.ID, "UC") && v.Duration == nil && strings.Contains(v.URL, "/channel/"))
+	if strings.EqualFold(v.IEKey, "YoutubeTab") || strings.EqualFold(v.IEKey, "YoutubeChannel") {
+		return true
+	}
+	if v.Duration == nil && (strings.Contains(v.URL, "/channel/") || strings.Contains(v.URL, "/@") || strings.Contains(v.URL, "/c/") || strings.Contains(v.URL, "/user/")) {
+		return true
+	}
+	if strings.HasPrefix(v.ID, "UC") && len(v.ID) == 24 && v.Duration == nil {
+		return true
+	}
+	return false
 }
 
 func (v video) channelTargetURL() string {

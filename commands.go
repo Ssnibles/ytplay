@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -57,20 +58,54 @@ type channelMsg struct {
 	more         bool
 }
 
-// searchCmd fetches results via yt-dlp's ytsearchN: syntax. N is the total
-// count asked for: "more" batches re-ask with a bigger N (yt-dlp pages
-// internally) and the results are deduplicated by ID on merge.
+// prioritizeChannels returns a slice where any channel entries appear first,
+// preserving the relative order of channels and non-channel videos.
+func prioritizeChannels(videos []video) []video {
+	if len(videos) <= 1 {
+		return videos
+	}
+	channels := make([]video, 0, len(videos))
+	nonChannels := make([]video, 0, len(videos))
+	for _, v := range videos {
+		if v.isChannel() {
+			channels = append(channels, v)
+		} else {
+			nonChannels = append(nonChannels, v)
+		}
+	}
+	if len(channels) == 0 || len(nonChannels) == 0 {
+		return videos
+	}
+	return append(channels, nonChannels...)
+}
+
+// searchCmd fetches results via yt-dlp. It queries YouTube search results
+// (falling back to ytsearch syntax) up to limit entries, and ensures that any
+// channel found in the results is prioritized at the top.
 func searchCmd(query string, limit int, more bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
+		q := strings.TrimSpace(query)
+		searchTarget := q
+		if !strings.HasPrefix(q, "http://") && !strings.HasPrefix(q, "https://") {
+			searchTarget = "https://www.youtube.com/results?search_query=" + url.QueryEscape(q)
+		}
+
 		cmd := exec.CommandContext(ctx, "yt-dlp",
-			"--flat-playlist", "--skip-download", "--no-warnings", "--no-playlist",
-			"-J", fmt.Sprintf("ytsearch%d:%s", limit, query))
+			"--flat-playlist", "--skip-download", "--no-warnings",
+			fmt.Sprintf("--playlist-end=%d", limit),
+			"-J", searchTarget)
 		out, err := cmd.Output()
 		if err != nil {
-			return searchMsg{err: fmt.Errorf("yt-dlp: %w", err), limit: limit, more: more}
+			cmd = exec.CommandContext(ctx, "yt-dlp",
+				"--flat-playlist", "--skip-download", "--no-warnings", "--no-playlist",
+				"-J", fmt.Sprintf("ytsearch%d:%s", limit, query))
+			out, err = cmd.Output()
+			if err != nil {
+				return searchMsg{err: fmt.Errorf("yt-dlp: %w", err), limit: limit, more: more}
+			}
 		}
 
 		var res struct {
@@ -89,6 +124,7 @@ func searchCmd(query string, limit int, more bool) tea.Cmd {
 			seen[v.ID] = true
 			videos = append(videos, v)
 		}
+		videos = prioritizeChannels(videos)
 		if len(videos) == 0 {
 			// a follow-up page hitting the end comes back empty — that's not
 			// an error, it just means there is nothing more to load.
@@ -102,10 +138,11 @@ func searchCmd(query string, limit int, more bool) tea.Cmd {
 }
 
 // mergeResults appends the videos in extra that aren't already in base,
-// keeping base's order (and YouTube's order within extra).
+// keeping base's order (and YouTube's order within extra), and always
+// prioritizing any channels at the top.
 func mergeResults(base, extra []video) []video {
 	if len(base) == 0 {
-		return extra
+		return prioritizeChannels(extra)
 	}
 	seen := make(map[string]bool, len(base)+len(extra))
 	for _, v := range base {
@@ -119,7 +156,7 @@ func mergeResults(base, extra []video) []video {
 			merged = append(merged, v)
 		}
 	}
-	return merged
+	return prioritizeChannels(merged)
 }
 
 // detailCmd extracts channel/video stats for one video. A full (non-flat)

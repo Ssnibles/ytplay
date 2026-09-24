@@ -501,8 +501,12 @@ func TestChannelNavigationAndEsc(t *testing.T) {
 		},
 	})
 
-	// 1. Enter on a channel result opens the channel
-	m = update(m, keyRunes("j")) // move to Channel Result
+	// Channel is prioritized first in the search results
+	if (m.(model)).filtered[0].ID != "UC999" {
+		t.Fatalf("channel should be placed first, got %v", (m.(model)).filtered[0].ID)
+	}
+
+	// 1. Enter on the channel result (first item) opens the channel
 	mm, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = mm
 	if (m.(model)).state != channelState {
@@ -541,8 +545,8 @@ func TestChannelNavigationAndEsc(t *testing.T) {
 	if (m.(model)).state != resultsState {
 		t.Fatalf("Esc in channel should return to results, got %v", (m.(model)).state)
 	}
-	if (m.(model)).cursor != 1 {
-		t.Fatalf("cursor in results should be preserved at 1, got %d", (m.(model)).cursor)
+	if (m.(model)).cursor != 0 {
+		t.Fatalf("cursor in results should be preserved at 0, got %d", (m.(model)).cursor)
 	}
 }
 

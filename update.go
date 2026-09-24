@@ -573,9 +573,21 @@ func (m model) handleSearchMsg(msg searchMsg) (model, tea.Cmd) {
 	m.errMsg = ""
 	m.status = ""
 	if msg.more {
+		selectedID := ""
+		if m.cursor >= 0 && m.cursor < len(m.filtered) {
+			selectedID = m.filtered[m.cursor].ID
+		}
 		m.filtered = mergeResults(m.filtered, msg.videos)
+		if selectedID != "" {
+			for i, v := range m.filtered {
+				if v.ID == selectedID {
+					m.cursor = i
+					break
+				}
+			}
+		}
 	} else {
-		m.filtered = msg.videos
+		m.filtered = prioritizeChannels(msg.videos)
 		m.state = resultsState
 		m.cursor = 0
 	}

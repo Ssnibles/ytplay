@@ -136,7 +136,7 @@ func renderThumbData(img image.Image, cols, rows int, proto imgProto) (string, e
 var httpClient = &http.Client{Timeout: 15 * time.Second}
 
 func fetchThumb(v video) ([]byte, error) {
-	url := fmt.Sprintf("https://i.ytimg.com/vi/%s/mqdefault.jpg", v.ID)
+	url := v.thumbURL()
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
