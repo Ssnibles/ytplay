@@ -123,3 +123,32 @@ func TestTightThumbDims(t *testing.T) {
 		t.Errorf("square in 12x10: got %dx%d, want 12x6", cols, rows)
 	}
 }
+
+func TestSplitThumbArt(t *testing.T) {
+	// ANSI plain text / halfblock
+	ansi := "line1\nline2\nline3"
+	seq, lines := splitThumbArt(ansi)
+	if seq != "" {
+		t.Errorf("ansi: want empty setupSeq, got %q", seq)
+	}
+	if len(lines) != 3 || lines[0] != "line1" || lines[2] != "line3" {
+		t.Errorf("ansi lines mismatch: %v", lines)
+	}
+
+	// Kitty-style control sequence
+	kitty := "\x1b_Gf=100,t=d;payload\x1b\\\x1b_Ga=p,U=1,c=10,r=2\x1b\\row0\nrow1"
+	seq, lines = splitThumbArt(kitty)
+	wantSeq := "\x1b_Gf=100,t=d;payload\x1b\\\x1b_Ga=p,U=1,c=10,r=2\x1b\\"
+	if seq != wantSeq {
+		t.Errorf("kitty setupSeq: got %q, want %q", seq, wantSeq)
+	}
+	if len(lines) != 2 || lines[0] != "row0" || lines[1] != "row1" {
+		t.Errorf("kitty raw lines mismatch: %v", lines)
+	}
+
+	// Empty string
+	seq, lines = splitThumbArt("")
+	if seq != "" || len(lines) != 0 {
+		t.Errorf("empty split failed: seq=%q, lines=%v", seq, lines)
+	}
+}

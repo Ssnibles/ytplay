@@ -209,22 +209,10 @@ func wrapText(s string, width int) []string {
 	return out
 }
 
-// lines renders the stats as up to maxLines rows, combining views and post
-// date on one line and wrapping channel descriptions over lines. Unknown fields are skipped.
-// An optional scroll offset can be passed as a second parameter to scroll through descriptions.
+// lines renders stats and description lines. If called without opts, all
+// stats and wrapped description lines are returned. If opts are provided,
+// opts[0] limits the output lines and opts[1] applies an optional scroll offset.
 func (d videoDetail) lines(width int, opts ...int) []string {
-	limit := detailLines
-	if len(opts) > 0 {
-		limit = opts[0]
-	}
-	if limit <= 0 {
-		return nil
-	}
-	scroll := 0
-	if len(opts) > 1 && opts[1] > 0 {
-		scroll = opts[1]
-	}
-
 	var stats []string
 	if d.subs != nil {
 		stats = append(stats, hint(formatCount(*d.subs)+" subscribers", width))
@@ -246,44 +234,59 @@ func (d videoDetail) lines(width int, opts ...int) []string {
 		stats = append(stats, hint(strings.Join(detail, " · "), width))
 	}
 
-	if len(stats) >= limit {
-		return stats[:limit]
-	}
-
-	availDesc := limit - len(stats)
-	out := make([]string, len(stats))
-	copy(out, stats)
-
+	var descLines []string
 	if d.description != "" {
-		allDesc := wrapText(d.description, width)
-		totalDesc := len(allDesc)
-		if totalDesc > 0 {
-			maxScroll := totalDesc - availDesc
-			if maxScroll < 0 {
-				maxScroll = 0
-			}
-			if scroll > maxScroll {
-				scroll = maxScroll
-			}
-			end := scroll + availDesc
-			if end > totalDesc {
-				end = totalDesc
-			}
-			for i := scroll; i < end; i++ {
-				ln := allDesc[i]
-				if ln == "" {
-					out = append(out, "")
-				} else {
-					out = append(out, hint(ln, width))
-				}
+		for _, ln := range wrapText(d.description, width) {
+			if ln == "" {
+				descLines = append(descLines, "")
+			} else {
+				descLines = append(descLines, hint(ln, width))
 			}
 		}
 	}
+
+	if len(opts) > 0 {
+		limit := opts[0]
+		if limit <= 0 {
+			return nil
+		}
+		scroll := 0
+		if len(opts) > 1 && opts[1] > 0 {
+			scroll = opts[1]
+		}
+		if len(stats) >= limit {
+			return stats[:limit]
+		}
+		availDesc := limit - len(stats)
+		out := make([]string, len(stats))
+		copy(out, stats)
+		if len(descLines) > 0 {
+			if scroll > len(descLines) {
+				scroll = len(descLines)
+			}
+			end := scroll + availDesc
+			if end > len(descLines) {
+				end = len(descLines)
+			}
+			out = append(out, descLines[scroll:end]...)
+		}
+		for len(out) > 0 && out[len(out)-1] == "" {
+			out = out[:len(out)-1]
+		}
+		if len(out) > limit {
+			out = out[:limit]
+		}
+		return out
+	}
+
+	var out []string
+	out = append(out, stats...)
+	if len(stats) > 0 && len(descLines) > 0 {
+		out = append(out, "")
+	}
+	out = append(out, descLines...)
 	for len(out) > 0 && out[len(out)-1] == "" {
 		out = out[:len(out)-1]
-	}
-	if len(out) > limit {
-		out = out[:limit]
 	}
 	return out
 }

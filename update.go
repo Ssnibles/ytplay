@@ -931,28 +931,28 @@ func (m model) selectedDetail(v video) videoDetail {
 	return videoDetail{}
 }
 
-func (m model) currentPreviewLayout(v video) (width, availDetail int) {
+func (m model) previewLineCount(v video) int {
 	l := computeLayout(m.width, m.height)
-	w := l.rightW - 4
-	cols, rows := previewThumbDims(v, l)
-	_ = cols
-	thumbLines := 1
-	key := thumbKey(v.ID, cols, rows)
-	if art, ok := m.thumbs[key]; ok && art != "" && l.thumbOK {
-		thumbLines = rows
+	_, _, _, lines := m.previewContent(v, l)
+	return len(lines)
+}
+
+func (m model) maxPreviewScroll(v video) int {
+	l := computeLayout(m.width, m.height)
+	h := l.midH - 2
+	if h <= 0 {
+		return 0
 	}
-	linesInBody := 3 + thumbLines
-	avail := (l.midH - 2) - linesInBody - 1
-	if avail < 0 {
-		avail = 0
+	total := m.previewLineCount(v)
+	maxScroll := total - h
+	if maxScroll < 0 {
+		return 0
 	}
-	return w, avail
+	return maxScroll
 }
 
 func (m model) scrollDescDown(v video) model {
-	d := m.selectedDetail(v)
-	w, avail := m.currentPreviewLayout(v)
-	maxScroll := d.maxDescScroll(w, avail)
+	maxScroll := m.maxPreviewScroll(v)
 	if m.descScroll < maxScroll {
 		m.descScroll++
 	}
@@ -967,13 +967,13 @@ func (m model) scrollDescUp() model {
 }
 
 func (m model) pageDescDown(v video) model {
-	d := m.selectedDetail(v)
-	w, avail := m.currentPreviewLayout(v)
-	maxScroll := d.maxDescScroll(w, avail)
-	step := avail / 2
+	l := computeLayout(m.width, m.height)
+	h := l.midH - 2
+	step := h / 2
 	if step < 3 {
 		step = 3
 	}
+	maxScroll := m.maxPreviewScroll(v)
 	m.descScroll += step
 	if m.descScroll > maxScroll {
 		m.descScroll = maxScroll
@@ -982,7 +982,12 @@ func (m model) pageDescDown(v video) model {
 }
 
 func (m model) pageDescUp() model {
-	step := 5
+	l := computeLayout(m.width, m.height)
+	h := l.midH - 2
+	step := h / 2
+	if step < 3 {
+		step = 3
+	}
 	m.descScroll -= step
 	if m.descScroll < 0 {
 		m.descScroll = 0

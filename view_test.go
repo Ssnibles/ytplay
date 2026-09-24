@@ -187,7 +187,7 @@ func TestPreviewDescriptionScrolls(t *testing.T) {
 	}
 
 	mScrolled := m
-	mScrolled.descScroll = 5
+	mScrolled.descScroll = 8
 	outScrolled := mScrolled.viewPreview(l, v, 0)
 	if strings.Contains(outScrolled, "Description line 01") {
 		t.Fatalf("expected outScrolled to have scrolled past 'Description line 01', got:\n%s", outScrolled)
@@ -196,3 +196,114 @@ func TestPreviewDescriptionScrolls(t *testing.T) {
 		t.Fatalf("expected outScrolled to show later lines like 'Description line 10', got:\n%s", outScrolled)
 	}
 }
+
+func TestPreviewKittyThumbnailScrollsCleanly(t *testing.T) {
+	v := []video{{
+		ID:      "vid1",
+		Title:   "My Video",
+		Channel: "My Channel",
+	}}
+	l := computeLayout(80, 24)
+	cols, rows := previewThumbDims(v[0], l)
+	key := thumbKey(v[0].ID, cols, rows)
+
+	// Mock Kitty thumbnail with 3 rows of placeholders and a setup sequence
+	kittyArt := "\x1b_Gsetup_seq\x1b\\thumb_row0\nthumb_row1\nthumb_row2"
+
+	var descLines []string
+	for i := 1; i <= 20; i++ {
+		descLines = append(descLines, fmt.Sprintf("Paragraph line %d", i))
+	}
+	desc := strings.Join(descLines, "\n")
+
+	m := model{
+		width:    80,
+		height:   24,
+		proto:    protoKitty,
+		thumbs:   map[string]string{key: kittyArt},
+		filtered: v,
+		cursor:   0,
+		details: map[string]videoDetail{"vid1": {
+			subs:        i64p(500),
+			description: desc,
+		}},
+	}
+
+	// At scroll = 0: setup sequence is present with thumb_row0
+	out0 := m.viewPreview(l, v, 0)
+	if !strings.Contains(out0, "\x1b_Gsetup_seq\x1b\\thumb_row0") {
+		t.Fatalf("scroll 0 should have setup sequence prepended to thumb_row0, got:\n%s", out0)
+	}
+
+	// At scroll = 4: Title, Channel, "", and thumb_row0 are scrolled off.
+	// First visible thumbnail row is thumb_row1, which must receive the setup sequence.
+	m4 := m
+	m4.descScroll = 4
+	out4 := m4.viewPreview(l, v, 0)
+	if strings.Contains(out4, "thumb_row0") {
+		t.Fatalf("scroll 4 should have scrolled past thumb_row0, got:\n%s", out4)
+	}
+	if !strings.Contains(out4, "\x1b_Gsetup_seq\x1b\\thumb_row1") {
+		t.Fatalf("scroll 4 should have setup sequence prepended to thumb_row1, got:\n%s", out4)
+	}
+
+	// At scroll = 10: Thumbnail is scrolled completely off.
+	// Only description lines should appear, without setup sequence.
+	m10 := m
+	m10.descScroll = 10
+	out10 := m10.viewPreview(l, v, 0)
+	if strings.Contains(out10, "\x1b_Gsetup_seq\x1b\\") {
+		t.Fatalf("scroll 10 has no thumbnail visible, should not contain setup sequence, got:\n%s", out10)
+	}
+	if !strings.Contains(out10, "Paragraph line 3") {
+		t.Fatalf("scroll 10 should show later paragraph lines, got:\n%s", out10)
+	}
+}
+
+func TestSmallTerminalCanScrollFullDescription(t *testing.T) {
+	v := []video{{
+		ID:      "vid1",
+		Title:   "Compact Test",
+		Channel: "Short Channel",
+	}}
+	// Very small terminal: 60 columns wide, 14 lines high
+	l := computeLayout(60, 14)
+	desc := "Line 01\nLine 02\nLine 03\nLine 04\nLine 05\nLine 06\nLine 07\nLine 08\nLine 09\nLine 10"
+
+	m := model{
+		width:    60,
+		height:   14,
+		proto:    protoAnsi,
+		thumbs:   make(map[string]string),
+		filtered: v,
+		cursor:   0,
+		details: map[string]videoDetail{"vid1": {
+			description: desc,
+		}},
+	}
+
+	// Usable height inside the box is 14 - 4 - 2 = 8 lines
+	h := l.midH - 2
+	if h != 8 {
+		t.Fatalf("expected usable box height 8, got %d", h)
+	}
+
+	// At scroll = 0, title & channel take the top rows
+	out0 := m.viewPreview(l, v, 0)
+	if !strings.Contains(out0, "Compact Test") {
+		t.Fatalf("out0 should show title, got:\n%s", out0)
+	}
+
+	// Scroll down past the header to read the description with all 8 available lines
+	mScrolled := m
+	mScrolled.descScroll = 6
+	outScrolled := mScrolled.viewPreview(l, v, 0)
+	if strings.Contains(outScrolled, "Compact Test") {
+		t.Fatalf("outScrolled should have scrolled past title, got:\n%s", outScrolled)
+	}
+	// Check that multiple description lines now occupy the full height
+	if !strings.Contains(outScrolled, "Line 04") || !strings.Contains(outScrolled, "Line 08") {
+		t.Fatalf("outScrolled should show description lines 04-08 occupying full pane, got:\n%s", outScrolled)
+	}
+}
+

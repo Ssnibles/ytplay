@@ -189,6 +189,23 @@ func renderThumbData(img image.Image, cols, rows int, proto imgProto) (string, e
 	return out, nil
 }
 
+// splitThumbArt splits rendered thumbnail art into its leading terminal
+// setup/control sequence (e.g. Kitty transmit and virtual placement commands,
+// or Sixel DCS sequence) and the individual line slices (e.g. Kitty placeholder
+// character rows, or Sixel reserved lines, or Ansi halfblock lines).
+func splitThumbArt(art string) (setupSeq string, lines []string) {
+	if art == "" {
+		return "", nil
+	}
+	lastST := strings.LastIndex(art, "\x1b\\")
+	if lastST != -1 {
+		setupSeq = art[:lastST+2]
+		rawLines := strings.Split(art[lastST+2:], "\n")
+		return setupSeq, rawLines
+	}
+	return "", strings.Split(art, "\n")
+}
+
 // httpClient is shared by all thumbnail fetches. A hung connection must not
 // wedge the TUI, so every request gets an overall deadline.
 var httpClient = &http.Client{Timeout: 15 * time.Second}

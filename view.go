@@ -272,70 +272,62 @@ func previewThumbDims(v video, l layout) (cols, rows int) {
 	return l.cols, l.rows
 }
 
-func (m model) viewPreview(l layout, videos []video, cursor int) string {
-	boxStyle := paneBoxStyle
-	if m.focusPane == previewPane {
-		boxStyle = paneBoxActiveStyle
-	}
-	if len(videos) == 0 {
-		return boxStyle.Width(l.rightW - 2).Height(l.midH - 2).Render("")
-	}
-	v := videos[cursor]
-
-	// usable body width: the box is Width(rightW-2) with 1 column of inner
-	// padding each side.
+// previewContent builds the complete vertical lines of the preview pane for video v,
+// along with any image control sequence (setupSeq) and the line range [thumbStart, thumbEnd)
+// occupied by the thumbnail within the lines slice.
+func (m model) previewContent(v video, l layout) (setupSeq string, thumbStart, thumbEnd int, lines []string) {
 	w := l.rightW - 4
+	if w <= 0 {
+		return "", -1, -1, nil
+	}
 
-	var body strings.Builder
 	title := truncate(v.Title, w)
 	if dur := v.duration(); dur != "?:??" && !v.isChannel() {
 		title = truncate(v.Title, w-len(dur)-3) + " • " + dur
 	}
-	body.WriteString(previewTitleStyle.Render(title))
-	body.WriteString("\n")
+	lines = append(lines, previewTitleStyle.Render(title))
 
 	chName := v.channel()
 	if v.isChannel() {
 		chName = "Channel: " + chName
 	}
 	if m.focusPane == previewPane {
-		body.WriteString(previewChannelActiveStyle.Render(truncate("▶ "+chName+" (Enter: view channel)", w)))
+		lines = append(lines, previewChannelActiveStyle.Render(truncate("▶ "+chName+" (Enter: view channel)", w)))
 	} else {
-		body.WriteString(previewChannelStyle.Render(truncate(chName, w)))
+		lines = append(lines, previewChannelStyle.Render(truncate(chName, w)))
 	}
-	body.WriteString("\n\n")
+	lines = append(lines, "")
+
+	thumbStart = -1
+	thumbEnd = -1
 
 	cols, rows := previewThumbDims(v, l)
 	key := thumbKey(v.ID, cols, rows)
 	if !l.thumbOK {
-		body.WriteString(hint("terminal too small for a thumbnail", w))
+		lines = append(lines, hint("terminal too small for a thumbnail", w))
 	} else if art, ok := m.thumbs[key]; ok {
 		switch {
 		case art == "":
-			body.WriteString(hint("no thumbnail available", w))
+			lines = append(lines, hint("no thumbnail available", w))
 		case m.proto == protoAnsi:
-			// half-block art is plain text: it is recomputed by the renderer
-			// each frame and padded to the pane width.
 			artLines := strings.Split(art, "\n")
-			for i, ln := range artLines {
-				artLines[i] = simplePad(ln, w)
+			for _, ln := range artLines {
+				lines = append(lines, simplePad(ln, w))
 			}
-			body.WriteString(strings.Join(artLines, "\n"))
 		default:
-			// native image: the block (transmit + virtual placement + a grid of
-			// Unicode placeholder cells, `rows` lines) is cached by id@size; the
-			// per-image kitty number is encoded in the cells themselves, so
-			// switching videos rewrites them all and repaints the new image.
-			body.WriteString(art)
+			seq, rawLines := splitThumbArt(art)
+			setupSeq = seq
+			thumbStart = len(lines)
+			lines = append(lines, rawLines...)
+			thumbEnd = len(lines)
 		}
 	} else {
-		body.WriteString(hint("loading thumbnail…", w))
+		lines = append(lines, hint("loading thumbnail…", w))
 	}
 	if m.thumbBusy[key] {
-		body.WriteString("\n" + hint("fetching thumbnail…", w))
+		lines = append(lines, hint("fetching thumbnail…", w))
 	}
 
-	// channel & video stats below the thumbnail
 	d, ok := m.details[v.ID]
 	if !ok && v.isChannel() && (v.Followers != nil || v.Description != "") {
 		d = videoDetail{
@@ -347,24 +339,77 @@ func (m model) viewPreview(l layout, videos []video, cursor int) string {
 		ok = true
 	}
 	if ok {
-		linesInBody := strings.Count(body.String(), "\n") + 1
-		availDetail := (l.midH - 2) - linesInBody - 2
-		gap := "\n\n"
-		if availDetail <= 0 {
-			availDetail = (l.midH - 2) - linesInBody - 1
-			gap = "\n"
-		}
-		if availDetail > 0 {
-			if lines := d.lines(w, availDetail, m.descScroll); len(lines) > 0 {
-				body.WriteString(gap)
-				body.WriteString(strings.Join(lines, "\n"))
-			}
+		detailLines := d.lines(w)
+		if len(detailLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, detailLines...)
 		}
 	} else if m.detailBusy[v.ID] {
-		body.WriteString("\n\n" + hint("loading details…", w))
+		lines = append(lines, "")
+		lines = append(lines, hint("loading details…", w))
 	}
 
-	return boxStyle.Width(l.rightW - 2).Height(l.midH - 2).Render(body.String())
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	return setupSeq, thumbStart, thumbEnd, lines
+}
+
+func (m model) viewPreview(l layout, videos []video, cursor int) string {
+	boxStyle := paneBoxStyle
+	if m.focusPane == previewPane {
+		boxStyle = paneBoxActiveStyle
+	}
+	if len(videos) == 0 {
+		return boxStyle.Width(l.rightW - 2).Height(l.midH - 2).Render("")
+	}
+	v := videos[cursor]
+
+	setupSeq, thumbStart, thumbEnd, lines := m.previewContent(v, l)
+
+	h := l.midH - 2
+	if h <= 0 {
+		return boxStyle.Width(l.rightW - 2).Height(0).Render("")
+	}
+
+	total := len(lines)
+	maxScroll := total - h
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	scroll := m.descScroll
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+
+	end := scroll + h
+	if end > total {
+		end = total
+	}
+
+	visible := make([]string, end-scroll)
+	copy(visible, lines[scroll:end])
+
+	if thumbStart >= 0 && thumbEnd > thumbStart && setupSeq != "" {
+		if scroll < thumbEnd && end > thumbStart {
+			if m.proto == protoKitty {
+				firstVisibleThumb := max(scroll, thumbStart)
+				visIdx := firstVisibleThumb - scroll
+				visible[visIdx] = setupSeq + visible[visIdx]
+			} else if m.proto == protoSixel {
+				if scroll <= thumbStart {
+					visIdx := thumbStart - scroll
+					visible[visIdx] = setupSeq + visible[visIdx]
+				}
+			}
+		}
+	}
+
+	return boxStyle.Width(l.rightW - 2).Height(l.midH - 2).Render(strings.Join(visible, "\n"))
 }
 
 // listRow lays out a list entry with the duration right-aligned: the title is
