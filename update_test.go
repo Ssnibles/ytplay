@@ -697,3 +697,150 @@ func TestCapitalCOpensChannel(t *testing.T) {
 		t.Fatal("expected channelCmd to be queued")
 	}
 }
+
+func TestFocusPaneNavigationAndDescriptionScrolling(t *testing.T) {
+	desc := "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9\nLine 10"
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 20})
+	m = update(m, searchMsg{
+		videos: []video{
+			{ID: "v1", Title: "Vid 1", Channel: "Chan 1"},
+			{ID: "v2", Title: "Vid 2", Channel: "Chan 2"},
+		},
+	})
+	md := m.(model)
+	// Inject detail for v1 so scrolling is meaningful
+	md.details["v1"] = videoDetail{subs: i64p(100), description: desc}
+	m = md
+
+	if (m.(model)).focusPane != listPane {
+		t.Fatalf("expected initial focusPane to be listPane, got %v", (m.(model)).focusPane)
+	}
+
+	// Moving cursor in list pane moves cursor and leaves descScroll 0
+	m = update(m, keyRunes("j"))
+	if (m.(model)).cursor != 1 {
+		t.Fatalf("j should move cursor to 1, got %d", (m.(model)).cursor)
+	}
+	m = update(m, keyRunes("k"))
+	if (m.(model)).cursor != 0 {
+		t.Fatalf("k should move cursor back to 0, got %d", (m.(model)).cursor)
+	}
+
+	// Right arrow moves focus to previewPane
+	m = update(m, tea.KeyMsg{Type: tea.KeyRight})
+	if (m.(model)).focusPane != previewPane {
+		t.Fatalf("KeyRight should focus previewPane, got %v", (m.(model)).focusPane)
+	}
+
+	// While focused in previewPane, 'j' scrolls description down and does NOT move list cursor
+	m = update(m, keyRunes("j"))
+	if (m.(model)).cursor != 0 {
+		t.Fatalf("j in previewPane must not move list cursor, got %d", (m.(model)).cursor)
+	}
+	if (m.(model)).descScroll != 1 {
+		t.Fatalf("j in previewPane should increment descScroll to 1, got %d", (m.(model)).descScroll)
+	}
+
+	// Down arrow also scrolls description down
+	m = update(m, tea.KeyMsg{Type: tea.KeyDown})
+	if (m.(model)).cursor != 0 {
+		t.Fatalf("down in previewPane must not move list cursor, got %d", (m.(model)).cursor)
+	}
+	if (m.(model)).descScroll != 2 {
+		t.Fatalf("down in previewPane should increment descScroll to 2, got %d", (m.(model)).descScroll)
+	}
+
+	// 'k' scrolls description up
+	m = update(m, keyRunes("k"))
+	if (m.(model)).descScroll != 1 {
+		t.Fatalf("k in previewPane should decrement descScroll to 1, got %d", (m.(model)).descScroll)
+	}
+
+	// Up arrow scrolls description up
+	m = update(m, tea.KeyMsg{Type: tea.KeyUp})
+	if (m.(model)).descScroll != 0 {
+		t.Fatalf("up in previewPane should decrement descScroll to 0, got %d", (m.(model)).descScroll)
+	}
+
+	// Left arrow moves focus back to listPane
+	m = update(m, tea.KeyMsg{Type: tea.KeyLeft})
+	if (m.(model)).focusPane != listPane {
+		t.Fatalf("KeyLeft should focus listPane, got %v", (m.(model)).focusPane)
+	}
+
+	// 'l' moves focus to previewPane
+	m = update(m, keyRunes("l"))
+	if (m.(model)).focusPane != previewPane {
+		t.Fatalf("'l' should focus previewPane, got %v", (m.(model)).focusPane)
+	}
+
+	// 'h' moves focus back to listPane
+	m = update(m, keyRunes("h"))
+	if (m.(model)).focusPane != listPane {
+		t.Fatalf("'h' should focus listPane, got %v", (m.(model)).focusPane)
+	}
+
+	// In list pane, moving cursor resets descScroll
+	m = update(m, keyRunes("l")) // focus preview
+	m = update(m, keyRunes("j")) // scroll desc to 1
+	if (m.(model)).descScroll != 1 {
+		t.Fatalf("expected descScroll 1, got %d", (m.(model)).descScroll)
+	}
+	m = update(m, keyRunes("h")) // focus list
+	m = update(m, keyRunes("j")) // move cursor to 1
+	if (m.(model)).cursor != 1 {
+		t.Fatalf("expected cursor 1, got %d", (m.(model)).cursor)
+	}
+	if (m.(model)).descScroll != 0 {
+		t.Fatalf("moving selection in list should reset descScroll to 0, got %d", (m.(model)).descScroll)
+	}
+}
+
+func TestChannelAndQueuePaneFocus(t *testing.T) {
+	// Channel pane focus test
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{
+			{ID: "c1", Title: "Channel 1", IEKey: "YoutubeTab"},
+		},
+	})
+	// Enter to open channel
+	m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = update(m, channelMsg{
+		channelTitle: "Channel 1",
+		channelURL:   "https://www.youtube.com/channel/c1",
+		videos: []video{
+			{ID: "cv1", Title: "V1"},
+		},
+	})
+	if (m.(model)).state != channelState {
+		t.Fatalf("expected channelState, got %v", (m.(model)).state)
+	}
+	if (m.(model)).focusPane != listPane {
+		t.Fatalf("expected listPane focus in channel, got %v", (m.(model)).focusPane)
+	}
+	m = update(m, keyRunes("l"))
+	if (m.(model)).focusPane != previewPane {
+		t.Fatalf("'l' in channel should focus previewPane, got %v", (m.(model)).focusPane)
+	}
+	m = update(m, keyRunes("h"))
+	if (m.(model)).focusPane != listPane {
+		t.Fatalf("'h' in channel should focus listPane, got %v", (m.(model)).focusPane)
+	}
+
+	// Queue pane focus test
+	m = update(m, keyRunes("q"))
+	if (m.(model)).state != queueState {
+		t.Fatalf("expected queueState, got %v", (m.(model)).state)
+	}
+	m = update(m, keyRunes("l"))
+	if (m.(model)).focusPane != previewPane {
+		t.Fatalf("'l' in queue should focus previewPane, got %v", (m.(model)).focusPane)
+	}
+	m = update(m, keyRunes("h"))
+	if (m.(model)).focusPane != listPane {
+		t.Fatalf("'h' in queue should focus listPane, got %v", (m.(model)).focusPane)
+	}
+}

@@ -96,9 +96,9 @@ func (m model) viewQueue() string {
 // actionHints summarises the results-screen key bindings for the footer.
 func (m model) actionHints() string {
 	if m.focusPane == previewPane {
-		return "Enter view channel · Tab back to list · o open video · / search · Esc back"
+		return "j/k or ↑/↓ scroll desc · h/← list · Enter channel · o open · / search · Esc back"
 	}
-	return "Enter play · a queue · q view queue · Tab channel · c copy link · o open · / search · Esc back"
+	return "Enter play · a queue · l/→ details · Tab focus · c copy · o open · / search"
 }
 
 func (m model) viewResults() string {
@@ -211,8 +211,12 @@ func (m model) contentPanes(l layout, videos []video, cursor int) string {
 }
 
 func (m model) viewList(l layout, videos []video, cursor int) string {
+	boxStyle := paneBoxStyle
+	if m.focusPane == listPane {
+		boxStyle = paneBoxActiveStyle
+	}
 	if len(videos) == 0 {
-		return lipgloss.NewStyle().Width(l.leftW - 2).Height(l.midH - 2).Render("")
+		return boxStyle.Width(l.leftW - 2).Height(l.midH - 2).Render("")
 	}
 
 	// Keep the cursor on screen: once it passes the last visible row, the
@@ -246,7 +250,7 @@ func (m model) viewList(l layout, videos []video, cursor int) string {
 		lines = append(lines, line)
 	}
 
-	return paneBoxStyle.Width(l.leftW - 2).Height(l.midH - 2).Render(strings.Join(lines, "\n"))
+	return boxStyle.Width(l.leftW - 2).Height(l.midH - 2).Render(strings.Join(lines, "\n"))
 }
 
 // hint renders a short dim grey line that fits the preview pane body.
@@ -269,8 +273,12 @@ func previewThumbDims(v video, l layout) (cols, rows int) {
 }
 
 func (m model) viewPreview(l layout, videos []video, cursor int) string {
+	boxStyle := paneBoxStyle
+	if m.focusPane == previewPane {
+		boxStyle = paneBoxActiveStyle
+	}
 	if len(videos) == 0 {
-		return lipgloss.NewStyle().Width(l.rightW).Height(l.midH - 2).Render("")
+		return boxStyle.Width(l.rightW - 2).Height(l.midH - 2).Render("")
 	}
 	v := videos[cursor]
 
@@ -342,7 +350,7 @@ func (m model) viewPreview(l layout, videos []video, cursor int) string {
 		linesInBody := strings.Count(body.String(), "\n") + 1
 		availDetail := (l.midH - 2) - linesInBody - 1
 		if availDetail > 0 {
-			if lines := d.lines(w, availDetail); len(lines) > 0 {
+			if lines := d.lines(w, availDetail, m.descScroll); len(lines) > 0 {
 				body.WriteString("\n")
 				body.WriteString(strings.Join(lines, "\n"))
 			}
@@ -351,7 +359,7 @@ func (m model) viewPreview(l layout, videos []video, cursor int) string {
 		body.WriteString("\n" + hint("loading details…", w))
 	}
 
-	return paneBoxStyle.Width(l.rightW - 2).Height(l.midH - 2).Render(body.String())
+	return boxStyle.Width(l.rightW - 2).Height(l.midH - 2).Render(body.String())
 }
 
 // listRow lays out a list entry with the duration right-aligned: the title is

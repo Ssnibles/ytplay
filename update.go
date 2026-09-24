@@ -191,8 +191,33 @@ func (m model) handleQueueKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		m.errMsg = ""
 		m.status = ""
 		return m, nil
+	case tea.KeyTab:
+		if m.focusPane == listPane {
+			m.focusPane = previewPane
+		} else {
+			m.focusPane = listPane
+		}
+		return m, nil
+
+	case tea.KeyShiftTab:
+		if m.focusPane == previewPane {
+			m.focusPane = listPane
+		} else {
+			m.focusPane = previewPane
+		}
+		return m, nil
+
+	case tea.KeyLeft:
+		m.focusPane = listPane
+		return m, nil
+
+	case tea.KeyRight:
+		m.focusPane = previewPane
+		return m, nil
+
 	case tea.KeyEnter:
 		m = m.playFromQueue()
+		m.descScroll = 0
 		return m, m.loadSelectionFor(m.queue, m.queueCursor)
 	}
 
@@ -203,6 +228,18 @@ func (m model) handleQueueKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		down = true
 	case tea.KeyUp:
 		up = true
+	case tea.KeyPgUp:
+		if m.focusPane == previewPane {
+			m = m.pageDescUp()
+			return m, nil
+		}
+	case tea.KeyPgDown:
+		if m.focusPane == previewPane {
+			if len(m.queue) > 0 {
+				m = m.pageDescDown(m.queue[m.queueCursor])
+			}
+			return m, nil
+		}
 	case tea.KeyRunes:
 		switch string(msg.Runes) {
 		case "/":
@@ -212,6 +249,12 @@ func (m model) handleQueueKey(msg tea.KeyMsg) (model, tea.Cmd) {
 			m.input.Focus()
 			m.errMsg = ""
 			m.status = ""
+			return m, nil
+		case "h":
+			m.focusPane = listPane
+			return m, nil
+		case "l":
+			m.focusPane = previewPane
 			return m, nil
 		case "j":
 			down = true
@@ -223,6 +266,7 @@ func (m model) handleQueueKey(msg tea.KeyMsg) (model, tea.Cmd) {
 			m = m.moveQueueUp()
 		case "x", "d":
 			m = m.removeQueueAt(m.queueCursor)
+			m.descScroll = 0
 			cmds = append(cmds, m.loadSelectionFor(m.queue, m.queueCursor))
 		case "p":
 			m = m.playQueue()
@@ -236,12 +280,27 @@ func (m model) handleQueueKey(msg tea.KeyMsg) (model, tea.Cmd) {
 			}
 		}
 	}
+
+	if m.focusPane == previewPane {
+		if len(m.queue) > 0 {
+			if down {
+				m = m.scrollDescDown(m.queue[m.queueCursor])
+			}
+			if up {
+				m = m.scrollDescUp()
+			}
+		}
+		return m, nil
+	}
+
 	if down && m.queueCursor < len(m.queue)-1 {
 		m.queueCursor++
+		m.descScroll = 0
 		cmds = append(cmds, m.loadSelectionFor(m.queue, m.queueCursor))
 	}
 	if up && m.queueCursor > 0 {
 		m.queueCursor--
+		m.descScroll = 0
 		cmds = append(cmds, m.loadSelectionFor(m.queue, m.queueCursor))
 	}
 	return m, tea.Batch(cmds...)
@@ -281,6 +340,14 @@ func (m model) handleResultsKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		}
 		return m, nil
 
+	case tea.KeyLeft:
+		m.focusPane = listPane
+		return m, nil
+
+	case tea.KeyRight:
+		m.focusPane = previewPane
+		return m, nil
+
 	case tea.KeyEnter:
 		// Launch mpv or open channel if focused on channel/channel item.
 		if len(m.filtered) == 0 {
@@ -306,17 +373,29 @@ func (m model) handleResultsKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	case tea.KeyUp:
 		up = true
 	case tea.KeyPgUp:
+		if m.focusPane == previewPane {
+			m = m.pageDescUp()
+			return m, nil
+		}
 		if m.cursor > pageStep {
 			m.cursor -= pageStep
 		} else {
 			m.cursor = 0
 		}
+		m.descScroll = 0
 		cmds = append(cmds, m.loadSelection())
 	case tea.KeyPgDown:
+		if m.focusPane == previewPane {
+			if len(m.filtered) > 0 {
+				m = m.pageDescDown(m.filtered[m.cursor])
+			}
+			return m, nil
+		}
 		m.cursor += pageStep
 		if m.cursor >= len(m.filtered) {
 			m.cursor = len(m.filtered) - 1
 		}
+		m.descScroll = 0
 		cmds = append(cmds, m.loadSelection())
 	case tea.KeyRunes:
 		switch string(msg.Runes) {
@@ -327,6 +406,12 @@ func (m model) handleResultsKey(msg tea.KeyMsg) (model, tea.Cmd) {
 			m.input.Focus()
 			m.errMsg = ""
 			m.status = ""
+			return m, nil
+		case "h":
+			m.focusPane = listPane
+			return m, nil
+		case "l":
+			m.focusPane = previewPane
 			return m, nil
 		case "j":
 			down = true
@@ -361,18 +446,27 @@ func (m model) handleResultsKey(msg tea.KeyMsg) (model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		}
 	}
+
+	if m.focusPane == previewPane {
+		if len(m.filtered) > 0 {
+			if down {
+				m = m.scrollDescDown(m.filtered[m.cursor])
+			}
+			if up {
+				m = m.scrollDescUp()
+			}
+		}
+		return m, nil
+	}
+
 	if down && m.cursor < len(m.filtered)-1 {
 		m.cursor++
-		if m.focusPane == previewPane {
-			m.focusPane = listPane
-		}
+		m.descScroll = 0
 		cmds = append(cmds, m.loadSelection())
 	}
 	if up && m.cursor > 0 {
 		m.cursor--
-		if m.focusPane == previewPane {
-			m.focusPane = listPane
-		}
+		m.descScroll = 0
 		cmds = append(cmds, m.loadSelection())
 	}
 
@@ -434,6 +528,30 @@ func (m model) handleChannelKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		m.status = ""
 		return m, nil
 
+	case tea.KeyTab:
+		if m.focusPane == listPane {
+			m.focusPane = previewPane
+		} else {
+			m.focusPane = listPane
+		}
+		return m, nil
+
+	case tea.KeyShiftTab:
+		if m.focusPane == previewPane {
+			m.focusPane = listPane
+		} else {
+			m.focusPane = previewPane
+		}
+		return m, nil
+
+	case tea.KeyLeft:
+		m.focusPane = listPane
+		return m, nil
+
+	case tea.KeyRight:
+		m.focusPane = previewPane
+		return m, nil
+
 	case tea.KeyEnter:
 		if len(m.channelVideos) == 0 {
 			return m, nil
@@ -454,17 +572,29 @@ func (m model) handleChannelKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	case tea.KeyUp:
 		up = true
 	case tea.KeyPgUp:
+		if m.focusPane == previewPane {
+			m = m.pageDescUp()
+			return m, nil
+		}
 		if m.channelCursor > pageStep {
 			m.channelCursor -= pageStep
 		} else {
 			m.channelCursor = 0
 		}
+		m.descScroll = 0
 		cmds = append(cmds, m.loadSelectionFor(m.channelVideos, m.channelCursor))
 	case tea.KeyPgDown:
+		if m.focusPane == previewPane {
+			if len(m.channelVideos) > 0 {
+				m = m.pageDescDown(m.channelVideos[m.channelCursor])
+			}
+			return m, nil
+		}
 		m.channelCursor += pageStep
 		if m.channelCursor >= len(m.channelVideos) {
 			m.channelCursor = len(m.channelVideos) - 1
 		}
+		m.descScroll = 0
 		cmds = append(cmds, m.loadSelectionFor(m.channelVideos, m.channelCursor))
 	case tea.KeyRunes:
 		switch string(msg.Runes) {
@@ -475,6 +605,12 @@ func (m model) handleChannelKey(msg tea.KeyMsg) (model, tea.Cmd) {
 			m.input.Focus()
 			m.errMsg = ""
 			m.status = ""
+			return m, nil
+		case "h":
+			m.focusPane = listPane
+			return m, nil
+		case "l":
+			m.focusPane = previewPane
 			return m, nil
 		case "j":
 			down = true
@@ -506,12 +642,26 @@ func (m model) handleChannelKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		}
 	}
 
+	if m.focusPane == previewPane {
+		if len(m.channelVideos) > 0 {
+			if down {
+				m = m.scrollDescDown(m.channelVideos[m.channelCursor])
+			}
+			if up {
+				m = m.scrollDescUp()
+			}
+		}
+		return m, nil
+	}
+
 	if down && m.channelCursor < len(m.channelVideos)-1 {
 		m.channelCursor++
+		m.descScroll = 0
 		cmds = append(cmds, m.loadSelectionFor(m.channelVideos, m.channelCursor))
 	}
 	if up && m.channelCursor > 0 {
 		m.channelCursor--
+		m.descScroll = 0
 		cmds = append(cmds, m.loadSelectionFor(m.channelVideos, m.channelCursor))
 	}
 
@@ -765,3 +915,78 @@ func (m model) shouldLoadMore() bool {
 	}
 	return m.fetched <= len(m.filtered)
 }
+
+func (m model) selectedDetail(v video) videoDetail {
+	if d, ok := m.details[v.ID]; ok {
+		return d
+	}
+	if v.isChannel() && (v.Followers != nil || v.Description != "") {
+		return videoDetail{
+			subs:        v.Followers,
+			channelURL:  v.channelTargetURL(),
+			channelID:   v.ChannelID,
+			description: v.Description,
+		}
+	}
+	return videoDetail{}
+}
+
+func (m model) currentPreviewLayout(v video) (width, availDetail int) {
+	l := computeLayout(m.width, m.height)
+	w := l.rightW - 4
+	cols, rows := previewThumbDims(v, l)
+	_ = cols
+	thumbLines := 1
+	key := thumbKey(v.ID, cols, rows)
+	if art, ok := m.thumbs[key]; ok && art != "" && l.thumbOK {
+		thumbLines = rows
+	}
+	linesInBody := 3 + thumbLines
+	avail := (l.midH - 2) - linesInBody - 1
+	if avail < 0 {
+		avail = 0
+	}
+	return w, avail
+}
+
+func (m model) scrollDescDown(v video) model {
+	d := m.selectedDetail(v)
+	w, avail := m.currentPreviewLayout(v)
+	maxScroll := d.maxDescScroll(w, avail)
+	if m.descScroll < maxScroll {
+		m.descScroll++
+	}
+	return m
+}
+
+func (m model) scrollDescUp() model {
+	if m.descScroll > 0 {
+		m.descScroll--
+	}
+	return m
+}
+
+func (m model) pageDescDown(v video) model {
+	d := m.selectedDetail(v)
+	w, avail := m.currentPreviewLayout(v)
+	maxScroll := d.maxDescScroll(w, avail)
+	step := avail / 2
+	if step < 3 {
+		step = 3
+	}
+	m.descScroll += step
+	if m.descScroll > maxScroll {
+		m.descScroll = maxScroll
+	}
+	return m
+}
+
+func (m model) pageDescUp() model {
+	step := 5
+	m.descScroll -= step
+	if m.descScroll < 0 {
+		m.descScroll = 0
+	}
+	return m
+}
+

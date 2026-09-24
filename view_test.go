@@ -1,8 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 func TestListRow(t *testing.T) {
@@ -111,5 +115,84 @@ func TestQueueViewMatchesResultsLayout(t *testing.T) {
 	if qr.contentPanes(l, qr.queue, 0) != rr.contentPanes(l, rr.filtered, 0) {
 		t.Fatalf("queue and results panes render differently:\nqueue:\n%s\nresults:\n%s",
 			qr.contentPanes(l, qr.queue, 0), rr.contentPanes(l, rr.filtered, 0))
+	}
+}
+
+func TestSelectionIndicatorBorders(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(oldProfile)
+
+	v := []video{{ID: "a1", Title: "T", Channel: "C"}}
+	l := computeLayout(120, 40)
+	m := model{
+		state:    resultsState,
+		width:    120,
+		height:   40,
+		proto:    protoAnsi,
+		thumbs:   make(map[string]string),
+		filtered: v,
+		cursor:   0,
+	}
+
+	mList := m
+	mList.focusPane = listPane
+
+	mPrev := m
+	mPrev.focusPane = previewPane
+
+	// Both list and preview outputs must differ when focused vs unfocused
+	// because of the active border style vs default border style.
+	listWhenListActive := mList.viewList(l, v, 0)
+	listWhenPrevActive := mPrev.viewList(l, v, 0)
+	if listWhenListActive == listWhenPrevActive {
+		t.Fatalf("viewList output should differ when active vs inactive")
+	}
+
+	prevWhenListActive := mList.viewPreview(l, v, 0)
+	prevWhenPrevActive := mPrev.viewPreview(l, v, 0)
+	if prevWhenListActive == prevWhenPrevActive {
+		t.Fatalf("viewPreview output should differ when active vs inactive")
+	}
+}
+
+func TestPreviewDescriptionScrolls(t *testing.T) {
+	var descLines []string
+	for i := 1; i <= 25; i++ {
+		descLines = append(descLines, fmt.Sprintf("Description line %02d", i))
+	}
+	desc := strings.Join(descLines, "\n")
+
+	v := []video{{ID: "UC123", Title: "Linus Tech Tips", IEKey: "YoutubeTab"}}
+	l := computeLayout(80, 24)
+	m := model{
+		state:    resultsState,
+		width:    80,
+		height:   24,
+		proto:    protoAnsi,
+		thumbs:   make(map[string]string),
+		filtered: v,
+		cursor:   0,
+		details: map[string]videoDetail{"UC123": {
+			subs:        i64p(1000),
+			description: desc,
+		}},
+	}
+
+	m0 := m
+	m0.descScroll = 0
+	out0 := m0.viewPreview(l, v, 0)
+	if !strings.Contains(out0, "Description line 01") {
+		t.Fatalf("expected out0 to contain 'Description line 01', got:\n%s", out0)
+	}
+
+	mScrolled := m
+	mScrolled.descScroll = 5
+	outScrolled := mScrolled.viewPreview(l, v, 0)
+	if strings.Contains(outScrolled, "Description line 01") {
+		t.Fatalf("expected outScrolled to have scrolled past 'Description line 01', got:\n%s", outScrolled)
+	}
+	if !strings.Contains(outScrolled, "Description line 10") {
+		t.Fatalf("expected outScrolled to show later lines like 'Description line 10', got:\n%s", outScrolled)
 	}
 }

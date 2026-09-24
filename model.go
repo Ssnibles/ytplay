@@ -32,6 +32,7 @@ type navPage struct {
 	cursor         int
 	fetched        int
 	focusPane      pane
+	descScroll     int
 	channelTitle   string
 	channelURL     string
 	channelVideos  []video
@@ -68,6 +69,7 @@ type model struct {
 	channelFetchingMore bool     // a channel follow-up page is in flight
 	channelLoading      bool     // initial channel fetch in flight
 	focusPane           pane     // listPane vs previewPane focus
+	descScroll          int      // scroll offset in preview description lines
 	navStack            []navPage
 	status              string
 	errMsg              string
@@ -81,6 +83,7 @@ func (m model) currentNavPage() navPage {
 		cursor:         m.cursor,
 		fetched:        m.fetched,
 		focusPane:      m.focusPane,
+		descScroll:     m.descScroll,
 		channelTitle:   m.channelTitle,
 		channelURL:     m.channelURL,
 		channelVideos:  m.channelVideos,
@@ -107,6 +110,7 @@ func (m model) popNav() (model, bool) {
 	m.cursor = p.cursor
 	m.fetched = p.fetched
 	m.focusPane = p.focusPane
+	m.descScroll = p.descScroll
 	m.channelTitle = p.channelTitle
 	m.channelURL = p.channelURL
 	m.channelVideos = p.channelVideos

@@ -211,20 +211,26 @@ func wrapText(s string, width int) []string {
 
 // lines renders the stats as up to maxLines rows, combining views and post
 // date on one line and wrapping channel descriptions over lines. Unknown fields are skipped.
-func (d videoDetail) lines(width int, maxLines ...int) []string {
+// An optional scroll offset can be passed as a second parameter to scroll through descriptions.
+func (d videoDetail) lines(width int, opts ...int) []string {
 	limit := detailLines
-	if len(maxLines) > 0 {
-		limit = maxLines[0]
+	if len(opts) > 0 {
+		limit = opts[0]
 	}
 	if limit <= 0 {
 		return nil
 	}
-	var out []string
+	scroll := 0
+	if len(opts) > 1 && opts[1] > 0 {
+		scroll = opts[1]
+	}
+
+	var stats []string
 	if d.subs != nil {
-		out = append(out, hint(formatCount(*d.subs)+" subscribers", width))
+		stats = append(stats, hint(formatCount(*d.subs)+" subscribers", width))
 	}
 	if d.chViews != nil {
-		out = append(out, hint(formatCount(*d.chViews)+" total channel views", width))
+		stats = append(stats, hint(formatCount(*d.chViews)+" total channel views", width))
 	}
 	var detail []string
 	if d.views != nil {
@@ -237,17 +243,39 @@ func (d videoDetail) lines(width int, maxLines ...int) []string {
 		detail = append(detail, "posted "+d.date())
 	}
 	if len(detail) > 0 {
-		out = append(out, hint(strings.Join(detail, " · "), width))
+		stats = append(stats, hint(strings.Join(detail, " · "), width))
 	}
+
+	if len(stats) >= limit {
+		return stats[:limit]
+	}
+
+	availDesc := limit - len(stats)
+	out := make([]string, len(stats))
+	copy(out, stats)
+
 	if d.description != "" {
-		for _, ln := range wrapText(d.description, width) {
-			if len(out) >= limit {
-				break
+		allDesc := wrapText(d.description, width)
+		totalDesc := len(allDesc)
+		if totalDesc > 0 {
+			maxScroll := totalDesc - availDesc
+			if maxScroll < 0 {
+				maxScroll = 0
 			}
-			if ln == "" {
-				out = append(out, "")
-			} else {
-				out = append(out, hint(ln, width))
+			if scroll > maxScroll {
+				scroll = maxScroll
+			}
+			end := scroll + availDesc
+			if end > totalDesc {
+				end = totalDesc
+			}
+			for i := scroll; i < end; i++ {
+				ln := allDesc[i]
+				if ln == "" {
+					out = append(out, "")
+				} else {
+					out = append(out, hint(ln, width))
+				}
 			}
 		}
 	}
@@ -258,6 +286,33 @@ func (d videoDetail) lines(width int, maxLines ...int) []string {
 		out = out[:limit]
 	}
 	return out
+}
+
+// maxDescScroll returns the maximum scroll offset for description lines, given
+// the pane width and total maxLines available for stats + description.
+func (d videoDetail) maxDescScroll(width int, maxLines int) int {
+	if maxLines <= 0 || d.description == "" {
+		return 0
+	}
+	var statsCount int
+	if d.subs != nil {
+		statsCount++
+	}
+	if d.chViews != nil {
+		statsCount++
+	}
+	if d.views != nil || d.likes != nil || d.date() != "" {
+		statsCount++
+	}
+	availDesc := maxLines - statsCount
+	if availDesc <= 0 {
+		return 0
+	}
+	totalDesc := len(wrapText(d.description, width))
+	if totalDesc <= availDesc {
+		return 0
+	}
+	return totalDesc - availDesc
 }
 
 // formatCount renders a view/subscriber count compactly: 999, 1.2k, 45k, 1.5M.

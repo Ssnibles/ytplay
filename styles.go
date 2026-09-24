@@ -74,4 +74,9 @@ var (
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(bgRound).
 			Padding(0, 1)
+
+	paneBoxActiveStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(accent).
+			Padding(0, 1)
 )

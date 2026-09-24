@@ -199,3 +199,56 @@ func TestWrapText(t *testing.T) {
 	}
 }
 
+func TestVideoDetailScroll(t *testing.T) {
+	d := videoDetail{
+		subs:        i64p(1000),
+		description: "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6",
+	}
+	// limit = 4 lines.
+	// stats take 1 line (1k subscribers), so availDesc = 3 lines.
+	// offset 0: stats line, then Line 1, Line 2, Line 3.
+	l0 := d.lines(40, 4, 0)
+	if len(l0) != 4 {
+		t.Fatalf("expected 4 lines, got %d: %v", len(l0), l0)
+	}
+	if !strings.Contains(l0[0], "1k subscribers") {
+		t.Errorf("expected stats at top: %q", l0[0])
+	}
+	if !strings.Contains(l0[1], "Line 1") || !strings.Contains(l0[2], "Line 2") || !strings.Contains(l0[3], "Line 3") {
+		t.Errorf("unexpected lines for offset 0: %v", l0)
+	}
+
+	// offset 2: stats line remains pinned at top, description slices to Line 3, Line 4, Line 5.
+	l2 := d.lines(40, 4, 2)
+	if len(l2) != 4 {
+		t.Fatalf("expected 4 lines, got %d: %v", len(l2), l2)
+	}
+	if !strings.Contains(l2[0], "1k subscribers") {
+		t.Errorf("expected stats at top: %q", l2[0])
+	}
+	if !strings.Contains(l2[1], "Line 3") || !strings.Contains(l2[2], "Line 4") || !strings.Contains(l2[3], "Line 5") {
+		t.Errorf("unexpected lines for offset 2: %v", l2)
+	}
+}
+
+func TestMaxDescScroll(t *testing.T) {
+	d := videoDetail{
+		subs:        i64p(1000),
+		description: "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6",
+	}
+	// 6 desc lines, 1 stats line.
+	// maxLines = 4 -> availDesc = 3 -> maxScroll = 6 - 3 = 3.
+	if got := d.maxDescScroll(40, 4); got != 3 {
+		t.Fatalf("expected maxDescScroll 3, got %d", got)
+	}
+	// maxLines = 10 -> availDesc = 9 >= 6 -> maxScroll = 0.
+	if got := d.maxDescScroll(40, 10); got != 0 {
+		t.Fatalf("expected maxDescScroll 0, got %d", got)
+	}
+	// empty description -> maxScroll = 0.
+	dEmpty := videoDetail{subs: i64p(1000)}
+	if got := dEmpty.maxDescScroll(40, 4); got != 0 {
+		t.Fatalf("expected maxDescScroll 0 for empty description, got %d", got)
+	}
+}
+
