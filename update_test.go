@@ -462,3 +462,130 @@ func TestEscLeavesQueueToResults(t *testing.T) {
 		t.Fatalf("Esc in the queue view should return to results, got state %v", (m.(model)).state)
 	}
 }
+
+func TestSlashAlwaysOpensSearch(t *testing.T) {
+	// From results
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{videos: []video{{ID: "a1", Title: "One"}}})
+	m = update(m, keyRunes("/"))
+	if (m.(model)).state != promptState {
+		t.Fatalf("/ in results should open search prompt, got %v", (m.(model)).state)
+	}
+
+	// Esc in prompt returns to results
+	m = update(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if (m.(model)).state != resultsState {
+		t.Fatalf("Esc after / should return to results, got %v", (m.(model)).state)
+	}
+
+	// From queue
+	m = update(m, keyRunes("q"))
+	m = update(m, keyRunes("/"))
+	if (m.(model)).state != promptState {
+		t.Fatalf("/ in queue should open search prompt, got %v", (m.(model)).state)
+	}
+	m = update(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if (m.(model)).state != queueState {
+		t.Fatalf("Esc after / should return to queue, got %v", (m.(model)).state)
+	}
+}
+
+func TestChannelNavigationAndEsc(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{
+			{ID: "a1", Title: "Video 1", Channel: "Creator", ChannelID: "UC123"},
+			{ID: "UC999", Title: "Channel Result", IEKey: "YoutubeTab", URL: "https://www.youtube.com/channel/UC999"},
+		},
+	})
+
+	// 1. Enter on a channel result opens the channel
+	m = update(m, keyRunes("j")) // move to Channel Result
+	mm, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mm
+	if (m.(model)).state != channelState {
+		t.Fatalf("Enter on channel should enter channelState, got %v", (m.(model)).state)
+	}
+	if cmd == nil {
+		t.Fatal("expected channelCmd to be queued")
+	}
+
+	// 2. Channel message arrives with videos
+	m = update(m, channelMsg{
+		channelTitle: "Channel Result",
+		channelURL:   "https://www.youtube.com/channel/UC999",
+		videos: []video{
+			{ID: "cv1", Title: "Ch Video 1"},
+			{ID: "cv2", Title: "Ch Video 2"},
+		},
+	})
+	md := m.(model)
+	if len(md.channelVideos) != 2 {
+		t.Fatalf("expected 2 channel videos, got %d", len(md.channelVideos))
+	}
+
+	// 3. / from channel opens search, and Esc returns to channel
+	m = update(m, keyRunes("/"))
+	if (m.(model)).state != promptState {
+		t.Fatalf("/ in channel should open search prompt, got %v", (m.(model)).state)
+	}
+	m = update(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if (m.(model)).state != channelState {
+		t.Fatalf("Esc after / should return to channel, got %v", (m.(model)).state)
+	}
+
+	// 4. Esc in channel returns to results
+	m = update(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if (m.(model)).state != resultsState {
+		t.Fatalf("Esc in channel should return to results, got %v", (m.(model)).state)
+	}
+	if (m.(model)).cursor != 1 {
+		t.Fatalf("cursor in results should be preserved at 1, got %d", (m.(model)).cursor)
+	}
+}
+
+func TestTabFocusesChannelAndEnterOpens(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{
+			{ID: "a1", Title: "Video 1", Channel: "MyCreator", ChannelID: "UC456"},
+		},
+	})
+
+	// Tab focuses the preview pane channel
+	m = update(m, tea.KeyMsg{Type: tea.KeyTab})
+	if (m.(model)).focusPane != previewPane {
+		t.Fatal("Tab should focus previewPane (the channel)")
+	}
+
+	// Enter opens the channel
+	mm, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mm
+	if (m.(model)).state != channelState {
+		t.Fatalf("Enter while focused on channel should open channelState, got %v", (m.(model)).state)
+	}
+	if cmd == nil {
+		t.Fatal("expected channelCmd to be queued")
+	}
+}
+
+func TestCapitalCOpensChannel(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{
+			{ID: "a1", Title: "Video 1", Channel: "MyCreator", ChannelID: "UC456"},
+		},
+	})
+	mm, cmd := m.Update(keyRunes("C"))
+	m = mm
+	if (m.(model)).state != channelState {
+		t.Fatalf("C should open channelState, got %v", (m.(model)).state)
+	}
+	if cmd == nil {
+		t.Fatal("expected channelCmd to be queued")
+	}
+}

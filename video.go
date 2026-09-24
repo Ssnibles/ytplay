@@ -9,16 +9,38 @@ import (
 )
 
 type video struct {
-	ID        string   `json:"id"`
-	Title     string   `json:"title"`
-	URL       string   `json:"url"`
-	Channel   string   `json:"channel"`
-	Uploader  string   `json:"uploader"`
-	Duration  *float64 `json:"duration"`
-	ChannelID string   `json:"channel_id"`
+	ID         string   `json:"id"`
+	Title      string   `json:"title"`
+	URL        string   `json:"url"`
+	Channel    string   `json:"channel"`
+	Uploader   string   `json:"uploader"`
+	Duration   *float64 `json:"duration"`
+	ChannelID  string   `json:"channel_id"`
+	ChannelURL string   `json:"channel_url"`
+	IEKey      string   `json:"ie_key"`
+}
+
+func (v video) isChannel() bool {
+	return v.IEKey == "YoutubeTab" || (strings.HasPrefix(v.ID, "UC") && v.Duration == nil && strings.Contains(v.URL, "/channel/"))
+}
+
+func (v video) channelTargetURL() string {
+	if v.ChannelURL != "" {
+		return v.ChannelURL
+	}
+	if v.ChannelID != "" {
+		return "https://www.youtube.com/channel/" + v.ChannelID
+	}
+	if strings.Contains(v.URL, "/channel/") || strings.Contains(v.URL, "/@") {
+		return v.URL
+	}
+	return ""
 }
 
 func (v video) watchURL() string {
+	if v.isChannel() {
+		return v.channelTargetURL()
+	}
 	if strings.HasPrefix(v.URL, "http") {
 		return v.URL
 	}
@@ -29,10 +51,19 @@ func (v video) channel() string {
 	if v.Channel != "" {
 		return v.Channel
 	}
-	return v.Uploader
+	if v.Uploader != "" {
+		return v.Uploader
+	}
+	if v.isChannel() {
+		return v.Title
+	}
+	return ""
 }
 
 func (v video) duration() string {
+	if v.isChannel() {
+		return "Channel"
+	}
 	if v.Duration == nil || *v.Duration <= 0 {
 		return "?:??"
 	}

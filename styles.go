@@ -59,8 +59,13 @@ var (
 	searchingPrefixStyle = lipgloss.NewStyle().Foreground(fg)
 	searchingQueryStyle  = lipgloss.NewStyle().Bold(true).Foreground(fg)
 
-	previewTitleStyle   = lipgloss.NewStyle().Bold(true).Foreground(accent)
-	previewChannelStyle = lipgloss.NewStyle().Foreground(fgMid)
+	previewTitleStyle         = lipgloss.NewStyle().Bold(true).Foreground(accent)
+	previewChannelStyle       = lipgloss.NewStyle().Foreground(fgMid)
+	previewChannelActiveStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("000000")).
+					Background(accent).
+					Bold(true).
+					Padding(0, 1)
 
 	listActiveRowStyle = lipgloss.NewStyle().Foreground(accent).Bold(true)
 	listRowStyle       = lipgloss.NewStyle().Foreground(fg)

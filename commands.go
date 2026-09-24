@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
@@ -45,6 +46,15 @@ type copyMsg struct {
 type openMsg struct {
 	url string
 	err error
+}
+
+type channelMsg struct {
+	channelTitle string
+	channelURL   string
+	videos       []video
+	err          error
+	limit        int
+	more         bool
 }
 
 // searchCmd fetches results via yt-dlp's ytsearchN: syntax. N is the total
@@ -166,11 +176,87 @@ func copyURLCmd(url string) tea.Cmd {
 	}
 }
 
-// openChannelCmd opens a URL in the system browser (via xdg-open) off the TUI.
-func openChannelCmd(url string) tea.Cmd {
+// channelVideosURL formats a channel URL, handle, or ID into its /videos endpoint.
+func channelVideosURL(u string) string {
+	u = strings.TrimSpace(u)
+	if strings.HasPrefix(u, "UC") {
+		return "https://www.youtube.com/channel/" + u + "/videos"
+	}
+	if strings.HasPrefix(u, "@") {
+		return "https://www.youtube.com/" + u + "/videos"
+	}
+	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+		return "https://www.youtube.com/" + u + "/videos"
+	}
+	u = strings.TrimRight(u, "/")
+	if strings.HasSuffix(u, "/videos") {
+		return u
+	}
+	return u + "/videos"
+}
+
+// channelCmd fetches a batch of videos from a channel using yt-dlp.
+func channelCmd(channelTitle, channelURL string, limit int, more bool) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		vURL := channelVideosURL(channelURL)
+		cmd := exec.CommandContext(ctx, "yt-dlp",
+			"--flat-playlist", "--skip-download", "--no-warnings",
+			"-J", fmt.Sprintf("--playlist-end=%d", limit), vURL)
+		out, err := cmd.Output()
+		if err != nil {
+			return channelMsg{channelTitle: channelTitle, channelURL: channelURL, err: fmt.Errorf("yt-dlp: %w", err), limit: limit, more: more}
+		}
+
+		var res struct {
+			Title   string  `json:"title"`
+			Channel string  `json:"channel"`
+			Entries []video `json:"entries"`
+		}
+		if err := json.Unmarshal(out, &res); err != nil {
+			return channelMsg{channelTitle: channelTitle, channelURL: channelURL, err: fmt.Errorf("parse: %w", err), limit: limit, more: more}
+		}
+
+		title := channelTitle
+		if title == "" {
+			if res.Channel != "" {
+				title = res.Channel
+			} else if res.Title != "" {
+				title = strings.TrimSuffix(res.Title, " - Videos")
+			}
+		}
+
+		videos := make([]video, 0, len(res.Entries))
+		seen := make(map[string]bool, len(res.Entries))
+		for _, v := range res.Entries {
+			if v.ID == "" || v.Title == "" || seen[v.ID] {
+				continue
+			}
+			seen[v.ID] = true
+			if v.Channel == "" {
+				v.Channel = title
+			}
+			videos = append(videos, v)
+		}
+
+		if len(videos) == 0 {
+			if more {
+				return channelMsg{channelTitle: title, channelURL: channelURL, limit: limit, more: more}
+			}
+			return channelMsg{channelTitle: title, channelURL: channelURL, err: fmt.Errorf("no videos found"), limit: limit, more: more}
+		}
+
+		return channelMsg{channelTitle: title, channelURL: channelURL, videos: videos, limit: limit, more: more}
+	}
+}
+
+// openURLCmd opens a URL in the system browser (via xdg-open) off the TUI.
+func openURLCmd(url string) tea.Cmd {
 	return func() tea.Msg {
 		if url == "" {
-			return openMsg{"", fmt.Errorf("no channel available")}
+			return openMsg{"", fmt.Errorf("no URL available")}
 		}
 		devnull, err := os.Open(os.DevNull)
 		if err != nil {
@@ -186,18 +272,27 @@ func openChannelCmd(url string) tea.Cmd {
 	}
 }
 
-// openChannel returns the browser command for the selected video, using the
-// detail lookup for its channel URL when the flat search entry lacks one.
-func (m model) openChannel(v video) tea.Cmd {
-	if v.ChannelID != "" {
-		return openChannelCmd("https://www.youtube.com/channel/" + v.ChannelID)
+// openVideo returns the browser command to open the selected video directly in the browser.
+func (m model) openVideo(v video) tea.Cmd {
+	return openURLCmd(v.watchURL())
+}
+
+// resolveChannelURL finds the canonical channel URL for a video.
+func (m model) resolveChannelURL(v video) string {
+	if u := v.channelTargetURL(); u != "" {
+		return u
 	}
 	if d, ok := m.details[v.ID]; ok {
 		if url := d.channelLink(); url != "" {
-			return openChannelCmd(url)
+			return url
 		}
 	}
-	return openChannelCmd("")
+	return ""
+}
+
+// openChannel returns the browser command for the selected video's channel.
+func (m model) openChannel(v video) tea.Cmd {
+	return openURLCmd(m.resolveChannelURL(v))
 }
 
 func playInMPV(urls ...string) error {

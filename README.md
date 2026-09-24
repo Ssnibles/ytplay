@@ -22,8 +22,10 @@ TUI YouTube search & play built with [Bubble Tea](https://github.com/charmbracel
 - Infinite paging: keep scrolling near the bottom to fetch more results
 - `Enter` on a result spawns mpv detached — the TUI stays open so you can queue the next video
 - Play queue: `a` stages videos, `q` opens a queue page that reuses the same two-pane list + thumbnail/stats preview to reorder (`K`/`J`), remove (`x`), or play a single entry (`Enter`)
+- Channel browsing: browse a channel's videos in a two-pane list with thumbnails and stats (`Enter` on a channel result, `C` or `Tab` + `Enter` on a video)
 - Search history: past queries are persisted and recalled with `Ctrl+P` / `Ctrl+N`
-- `c` copies the selected video's URL, `o` opens its channel in your browser
+- `c` copies the selected video's URL, `o` opens the video directly in your browser
+- `/` always opens the search prompt, and `Esc` always navigates back to the previous view
 - Native image rendering when supported (kitty unicode placeholders / sixel), half-block ANSI art as fallback
 
 ## Usage
@@ -39,18 +41,34 @@ ytplay <query> # Search directly
 | ------------------- | -------------------- |
 | `Enter`             | search               |
 | `Ctrl+P` / `Ctrl+N` | recall past searches |
+| `Esc`               | cancel / go back     |
 
-| Key                                   | Results view                        |
+| Key                                   | Results view                                      |
+| ------------------------------------- | ------------------------------------------------- |
+| `j` / `k` / `↓` / `↑`                 | move selection                                    |
+| `Tab` / `Shift+Tab`                   | jump between list and channel preview             |
+| `PgUp` / `PgDn` / `j`/`k` near bottom | page & load more results                          |
+| `Enter`                               | play selected video (or browse channel if chosen) |
+| `C`                                   | view selected video's channel                     |
+| `a`                                   | add selected video to play queue                  |
+| `q`                                   | open the queue view                               |
+| `c`                                   | copy video URL to clipboard                       |
+| `o`                                   | open video in browser                             |
+| `/`                                   | open search prompt                                |
+| `Esc`                                 | back to previous view (or prompt)                 |
+| `Ctrl+C` / `Ctrl+D`                   | quit                                              |
+
+| Key                                   | Channel view                        |
 | ------------------------------------- | ----------------------------------- |
 | `j` / `k` / `↓` / `↑`                 | move selection                      |
-| `Tab` / `Shift+Tab`                   | jump between panes                  |
-| `PgUp` / `PgDn` / `j`/`k` near bottom | page & load more results            |
+| `PgUp` / `PgDn` / `j`/`k` near bottom | page & load more channel videos     |
 | `Enter`                               | play selected video (mpv, detached) |
 | `a`                                   | add selected video to play queue    |
 | `q`                                   | open the queue view                 |
 | `c`                                   | copy video URL to clipboard         |
-| `o`                                   | open channel in browser             |
-| `Esc`                                 | back to prompt (new search)         |
+| `o`                                   | open video in browser               |
+| `/`                                   | open search prompt                  |
+| `Esc`                                 | back to previous view               |
 | `Ctrl+C` / `Ctrl+D`                   | quit                                |
 
 | Key                   | Queue view                                   |
@@ -61,7 +79,10 @@ ytplay <query> # Search directly
 | `Enter`               | play selected video and remove it from queue |
 | `p`                   | play all queued videos in sequence           |
 | `c`                   | copy selected video's URL                    |
-| `Esc`                 | back to results                              |
+| `o`                   | open video in browser                        |
+| `/`                   | open search prompt                           |
+| `Esc`                 | back to results / previous view              |
+| `Ctrl+C` / `Ctrl+D`   | quit                                         |
 
 Search history is stored in `~/.config/ytplay/history`.
 

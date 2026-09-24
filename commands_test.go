@@ -64,3 +64,22 @@ func TestMergeResultsEdgeCases(t *testing.T) {
 		t.Fatalf("expected 1 result after duplicate merge, got %d", len(got))
 	}
 }
+
+func TestChannelVideosURL(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"UCuAXFkgsw1L7xaCfnd5JJOw", "https://www.youtube.com/channel/UCuAXFkgsw1L7xaCfnd5JJOw/videos"},
+		{"@veritasium", "https://www.youtube.com/@veritasium/videos"},
+		{"https://www.youtube.com/channel/UCabc", "https://www.youtube.com/channel/UCabc/videos"},
+		{"https://www.youtube.com/channel/UCabc/videos", "https://www.youtube.com/channel/UCabc/videos"},
+		{"https://www.youtube.com/@mkbhd", "https://www.youtube.com/@mkbhd/videos"},
+		{"https://www.youtube.com/@mkbhd/videos", "https://www.youtube.com/@mkbhd/videos"},
+	}
+	for _, c := range cases {
+		if got := channelVideosURL(c.in); got != c.want {
+			t.Errorf("channelVideosURL(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

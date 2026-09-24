@@ -18,6 +18,8 @@ func (m model) View() string {
 		return m.viewSearching()
 	case queueState:
 		return m.viewQueue()
+	case channelState:
+		return m.viewChannel()
 	default:
 		return m.viewResults()
 	}
@@ -37,9 +39,13 @@ func (m model) viewPrompt() string {
 		content = append(content, "", errorStyle.Render(m.errMsg))
 	}
 
+	cancelHint := "Ctrl+C / Esc to quit"
+	if len(m.navStack) > 0 {
+		cancelHint = "Esc to cancel / go back · Ctrl+C to quit"
+	}
 	hints := []string{
-		greyHintStyle.Render("Type a query and press enter to play in mpv"),
-		greyHintStyle.Render("Ctrl+C / Esc to quit"),
+		greyHintStyle.Render("Type a query and press enter to search"),
+		greyHintStyle.Render(cancelHint),
 	}
 	if len(m.history) > 0 {
 		hints = append(hints,
@@ -77,7 +83,7 @@ func (m model) viewQueue() string {
 	bar := "Up next"
 	hint := ""
 	if len(m.queue) > 0 {
-		hint = "j/k move · K/J reorder · x remove · Enter play · p play all · c copy · Esc back"
+		hint = "j/k move · K/J reorder · x remove · Enter play · p play all · c copy · o open · / search · Esc back"
 	}
 	empty := ""
 	if len(m.queue) == 0 && m.errMsg == "" {
@@ -88,8 +94,11 @@ func (m model) viewQueue() string {
 }
 
 // actionHints summarises the results-screen key bindings for the footer.
-func actionHints() string {
-	return "Enter play · a queue · q view queue · c copy link · o open in browser · Esc new search"
+func (m model) actionHints() string {
+	if m.focusPane == previewPane {
+		return "Enter view channel · Tab back to list · o open video · / search · Esc back"
+	}
+	return "Enter play · a queue · q view queue · Tab channel · c copy link · o open · / search · Esc back"
 }
 
 func (m model) viewResults() string {
@@ -104,7 +113,7 @@ func (m model) viewResults() string {
 	)
 
 	// The input row is replaced by a plain read-only line here: typing is
-	// ignored on the results screen (Esc returns to the editable prompt).
+	// ignored on the results screen (/ returns to the editable prompt).
 	bar := "Search: " + m.query
 	if m.fetchingMore {
 		bar += "  ·  loading more…"
@@ -112,14 +121,47 @@ func (m model) viewResults() string {
 
 	hint := ""
 	if len(m.filtered) > 0 {
-		hint = actionHints()
+		hint = m.actionHints()
 	}
 	empty := ""
 	if len(m.filtered) == 0 && m.errMsg == "" {
-		empty = "Nothing to show — press Esc to search again"
+		empty = "Nothing to show — press / to search"
 	}
 
 	return m.pageFrame(header, bar, hint, m.contentPanes(l, m.filtered, m.cursor), empty)
+}
+
+func (m model) viewChannel() string {
+	l := computeLayout(m.width, m.height)
+
+	header := headerStyle.Render(
+		lipgloss.JoinHorizontal(lipgloss.Left,
+			m.titleLine(),
+			dimStyle.Render(fmt.Sprintf(" Channel · %s", m.channelTitle)),
+			dimStyle.Render(fmt.Sprintf(" · %d videos", len(m.channelVideos))),
+			accentStyle.Render(fmt.Sprintf(" · %d queued", len(m.queue))),
+		),
+	)
+
+	bar := "Channel: " + m.channelTitle
+	if m.channelFetchingMore {
+		bar += "  ·  loading more…"
+	}
+
+	hint := ""
+	if len(m.channelVideos) > 0 {
+		hint = m.actionHints()
+	}
+	empty := ""
+	if len(m.channelVideos) == 0 && m.errMsg == "" {
+		if m.channelLoading {
+			empty = "Loading channel videos…"
+		} else {
+			empty = "Nothing to show — press Esc to go back"
+		}
+	}
+
+	return m.pageFrame(header, bar, hint, m.contentPanes(l, m.channelVideos, m.channelCursor), empty)
 }
 
 // pageFrame assembles the results-style layout shared by the results and queue
@@ -193,7 +235,11 @@ func (m model) viewList(l layout, videos []video, cursor int) string {
 		}
 		line := marker + " " + listRow(v, l.leftW-6)
 		if i == cursor {
-			line = listActiveRowStyle.Render(line)
+			if m.focusPane == previewPane {
+				line = listRowStyle.Render(line)
+			} else {
+				line = listActiveRowStyle.Render(line)
+			}
 		} else {
 			line = listRowStyle.Render(line)
 		}
@@ -220,12 +266,21 @@ func (m model) viewPreview(l layout, videos []video, cursor int) string {
 
 	var body strings.Builder
 	title := truncate(v.Title, w)
-	if dur := v.duration(); dur != "?:??" {
+	if dur := v.duration(); dur != "?:??" && !v.isChannel() {
 		title = truncate(v.Title, w-len(dur)-3) + " • " + dur
 	}
 	body.WriteString(previewTitleStyle.Render(title))
 	body.WriteString("\n")
-	body.WriteString(previewChannelStyle.Render(truncate(v.channel(), w)))
+
+	chName := v.channel()
+	if v.isChannel() {
+		chName = "Channel: " + chName
+	}
+	if m.focusPane == previewPane {
+		body.WriteString(previewChannelActiveStyle.Render(truncate("▶ "+chName+" (Enter: view channel)", w)))
+	} else {
+		body.WriteString(previewChannelStyle.Render(truncate(chName, w)))
+	}
 	body.WriteString("\n\n")
 
 	key := thumbKey(v.ID, l.cols, l.rows)

@@ -76,9 +76,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case openMsg:
 		m = m.handleOpenMsg(msg)
+
+	case channelMsg:
+		var cmd tea.Cmd
+		m, cmd = m.handleChannelMsg(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
-	if m.state == searchingState {
+	if m.state == searchingState || (m.state == channelState && m.channelLoading) {
 		cmds = append(cmds, m.spin.Tick)
 	}
 
@@ -91,6 +98,12 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) (model, tea.Cmd) {
 	// pixel size, so any size change invalidates them (the cache key
 	// includes the cell size too).
 	m.thumbs = make(map[string]string)
+	if m.state == channelState && len(m.channelVideos) > 0 {
+		return m, m.loadSelectionFor(m.channelVideos, m.channelCursor)
+	}
+	if m.state == queueState && len(m.queue) > 0 {
+		return m, m.loadSelectionFor(m.queue, m.queueCursor)
+	}
 	if len(m.filtered) > 0 {
 		return m, m.loadSelection()
 	}
@@ -107,6 +120,8 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		return m.handleQueueKey(msg)
 	case resultsState:
 		return m.handleResultsKey(msg)
+	case channelState:
+		return m.handleChannelKey(msg)
 	default:
 		return m, nil
 	}
@@ -115,6 +130,17 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 func (m model) handlePromptKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc:
+		if prev, ok := m.popNav(); ok {
+			var cmd tea.Cmd
+			if prev.state == resultsState && len(prev.filtered) > 0 {
+				cmd = prev.loadSelection()
+			} else if prev.state == channelState && len(prev.channelVideos) > 0 {
+				cmd = prev.loadSelectionFor(prev.channelVideos, prev.channelCursor)
+			} else if prev.state == queueState && len(prev.queue) > 0 {
+				cmd = prev.loadSelectionFor(prev.queue, prev.queueCursor)
+			}
+			return prev, cmd
+		}
 		return m, tea.Quit
 	case tea.KeyCtrlP:
 		return m.historyPrev(), nil
@@ -125,6 +151,7 @@ func (m model) handlePromptKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		if q == "" {
 			return m, nil
 		}
+		m = m.pushNav()
 		m.query = q
 		m = m.rememberQuery(q)
 		m.state = searchingState
@@ -138,8 +165,12 @@ func (m model) handlePromptKey(msg tea.KeyMsg) (model, tea.Cmd) {
 
 func (m model) handleSearchingKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	if msg.Type == tea.KeyEsc {
-		// A search is single-run; Esc bails out of it.
-		return m, tea.Quit
+		if prev, ok := m.popNav(); ok {
+			return prev, nil
+		}
+		m.state = promptState
+		m.input.Focus()
+		return m, nil
 	}
 	return m, nil
 }
@@ -150,7 +181,15 @@ func (m model) handleQueueKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	}
 	switch msg.Type {
 	case tea.KeyEsc:
-		// Back to the results list, keeping the queue intact.
+		if prev, ok := m.popNav(); ok {
+			var cmd tea.Cmd
+			if prev.state == resultsState && len(prev.filtered) > 0 {
+				cmd = prev.loadSelection()
+			} else if prev.state == channelState && len(prev.channelVideos) > 0 {
+				cmd = prev.loadSelectionFor(prev.channelVideos, prev.channelCursor)
+			}
+			return prev, cmd
+		}
 		m.state = resultsState
 		m.errMsg = ""
 		m.status = ""
@@ -163,12 +202,19 @@ func (m model) handleQueueKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	var cmds []tea.Cmd
 	var down, up bool
 	switch msg.Type {
-	case tea.KeyDown, tea.KeyTab:
+	case tea.KeyDown:
 		down = true
-	case tea.KeyUp, tea.KeyShiftTab:
+	case tea.KeyUp:
 		up = true
 	case tea.KeyRunes:
 		switch string(msg.Runes) {
+		case "/":
+			m = m.pushNav()
+			m.state = promptState
+			m.input.Focus()
+			m.errMsg = ""
+			m.status = ""
+			return m, nil
 		case "j":
 			down = true
 		case "k":
@@ -186,6 +232,10 @@ func (m model) handleQueueKey(msg tea.KeyMsg) (model, tea.Cmd) {
 			if len(m.queue) > 0 {
 				cmds = append(cmds, copyURLCmd(m.queue[m.queueCursor].watchURL()))
 			}
+		case "o":
+			if len(m.queue) > 0 {
+				cmds = append(cmds, m.openVideo(m.queue[m.queueCursor]))
+			}
 		}
 	}
 	if down && m.queueCursor < len(m.queue)-1 {
@@ -202,18 +252,46 @@ func (m model) handleQueueKey(msg tea.KeyMsg) (model, tea.Cmd) {
 func (m model) handleResultsKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc:
-		// Back to the search bar for a fresh search.
+		if prev, ok := m.popNav(); ok {
+			var cmd tea.Cmd
+			if prev.state == resultsState && len(prev.filtered) > 0 {
+				cmd = prev.loadSelection()
+			} else if prev.state == channelState && len(prev.channelVideos) > 0 {
+				cmd = prev.loadSelectionFor(prev.channelVideos, prev.channelCursor)
+			}
+			return prev, cmd
+		}
 		m.state = promptState
+		m.input.Focus()
 		m.errMsg = ""
 		m.status = ""
 		return m, nil
+
+	case tea.KeyTab:
+		if m.focusPane == listPane {
+			m.focusPane = previewPane
+		} else {
+			m.focusPane = listPane
+		}
+		return m, nil
+
+	case tea.KeyShiftTab:
+		if m.focusPane == previewPane {
+			m.focusPane = listPane
+		} else {
+			m.focusPane = previewPane
+		}
+		return m, nil
+
 	case tea.KeyEnter:
-		// Launch mpv in the background (Cmd.Start, non-blocking) and keep
-		// the interface open so more videos can be picked.
+		// Launch mpv or open channel if focused on channel/channel item.
 		if len(m.filtered) == 0 {
 			return m, nil
 		}
 		v := m.filtered[m.cursor]
+		if m.focusPane == previewPane || v.isChannel() {
+			return m.openChannelView(v)
+		}
 		if err := playInMPV(v.watchURL()); err != nil {
 			m.errMsg = err.Error()
 			return m, nil
@@ -222,12 +300,12 @@ func (m model) handleResultsKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	}
 
 	var cmds []tea.Cmd
-	// Selection movement (arrows, tabs, and vim j/k).
+	// Selection movement (arrows and vim j/k).
 	var down, up bool
 	switch msg.Type {
-	case tea.KeyDown, tea.KeyTab:
+	case tea.KeyDown:
 		down = true
-	case tea.KeyUp, tea.KeyShiftTab:
+	case tea.KeyUp:
 		up = true
 	case tea.KeyPgUp:
 		if m.cursor > pageStep {
@@ -244,6 +322,13 @@ func (m model) handleResultsKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		cmds = append(cmds, m.loadSelection())
 	case tea.KeyRunes:
 		switch string(msg.Runes) {
+		case "/":
+			m = m.pushNav()
+			m.state = promptState
+			m.input.Focus()
+			m.errMsg = ""
+			m.status = ""
+			return m, nil
 		case "j":
 			down = true
 		case "k":
@@ -254,9 +339,11 @@ func (m model) handleResultsKey(msg tea.KeyMsg) (model, tea.Cmd) {
 			}
 		case "o":
 			if len(m.filtered) > 0 {
-				if c := m.openChannel(m.filtered[m.cursor]); c != nil {
-					cmds = append(cmds, c)
-				}
+				cmds = append(cmds, m.openVideo(m.filtered[m.cursor]))
+			}
+		case "C":
+			if len(m.filtered) > 0 {
+				return m.openChannelView(m.filtered[m.cursor])
 			}
 		case "a":
 			if len(m.filtered) > 0 {
@@ -267,6 +354,7 @@ func (m model) handleResultsKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		case "p":
 			m = m.playQueue()
 		case "q":
+			m = m.pushNav()
 			m.state = queueState
 			m.errMsg = ""
 			m.status = ""
@@ -276,23 +364,200 @@ func (m model) handleResultsKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	}
 	if down && m.cursor < len(m.filtered)-1 {
 		m.cursor++
+		if m.focusPane == previewPane {
+			m.focusPane = listPane
+		}
 		cmds = append(cmds, m.loadSelection())
 	}
 	if up && m.cursor > 0 {
 		m.cursor--
+		if m.focusPane == previewPane {
+			m.focusPane = listPane
+		}
 		cmds = append(cmds, m.loadSelection())
 	}
 
-	// Paging deeper into the channel: once the selection nears the
-	// bottom of what has been fetched, ask for the next page (unless a
-	// fetch is already in flight). Only key presses trigger this, so
-	// after a merge the user still decides when to scroll on.
+	// Paging deeper into the search: once the selection nears the
+	// bottom of what has been fetched, ask for the next page.
 	if m.shouldLoadMore() {
 		m.fetchingMore = true
 		cmds = append(cmds, searchCmd(m.query, m.fetched+searchResults, true))
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m model) openChannelView(v video) (model, tea.Cmd) {
+	chURL := m.resolveChannelURL(v)
+	chTitle := v.channel()
+	if chTitle == "" {
+		chTitle = v.Title
+	}
+	if chURL == "" && chTitle != "" {
+		chURL = chTitle
+	}
+	if chURL == "" {
+		m.errMsg = "no channel available"
+		return m, nil
+	}
+
+	m = m.pushNav()
+	m.state = channelState
+	m.channelTitle = chTitle
+	m.channelURL = chURL
+	m.channelVideos = nil
+	m.channelCursor = 0
+	m.channelFetched = searchResults
+	m.channelLoading = true
+	m.channelFetchingMore = false
+	m.focusPane = listPane
+	m.errMsg = ""
+	m.status = "Loading channel " + chTitle + "…"
+
+	return m, channelCmd(chTitle, chURL, searchResults, false)
+}
+
+func (m model) handleChannelKey(msg tea.KeyMsg) (model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		if prev, ok := m.popNav(); ok {
+			var cmd tea.Cmd
+			if prev.state == resultsState && len(prev.filtered) > 0 {
+				cmd = prev.loadSelection()
+			} else if prev.state == channelState && len(prev.channelVideos) > 0 {
+				cmd = prev.loadSelectionFor(prev.channelVideos, prev.channelCursor)
+			}
+			return prev, cmd
+		}
+		m.state = promptState
+		m.input.Focus()
+		m.errMsg = ""
+		m.status = ""
+		return m, nil
+
+	case tea.KeyEnter:
+		if len(m.channelVideos) == 0 {
+			return m, nil
+		}
+		v := m.channelVideos[m.channelCursor]
+		if err := playInMPV(v.watchURL()); err != nil {
+			m.errMsg = err.Error()
+			return m, nil
+		}
+		return m, nil
+	}
+
+	var cmds []tea.Cmd
+	var down, up bool
+	switch msg.Type {
+	case tea.KeyDown:
+		down = true
+	case tea.KeyUp:
+		up = true
+	case tea.KeyPgUp:
+		if m.channelCursor > pageStep {
+			m.channelCursor -= pageStep
+		} else {
+			m.channelCursor = 0
+		}
+		cmds = append(cmds, m.loadSelectionFor(m.channelVideos, m.channelCursor))
+	case tea.KeyPgDown:
+		m.channelCursor += pageStep
+		if m.channelCursor >= len(m.channelVideos) {
+			m.channelCursor = len(m.channelVideos) - 1
+		}
+		cmds = append(cmds, m.loadSelectionFor(m.channelVideos, m.channelCursor))
+	case tea.KeyRunes:
+		switch string(msg.Runes) {
+		case "/":
+			m = m.pushNav()
+			m.state = promptState
+			m.input.Focus()
+			m.errMsg = ""
+			m.status = ""
+			return m, nil
+		case "j":
+			down = true
+		case "k":
+			up = true
+		case "c":
+			if len(m.channelVideos) > 0 {
+				cmds = append(cmds, copyURLCmd(m.channelVideos[m.channelCursor].watchURL()))
+			}
+		case "o":
+			if len(m.channelVideos) > 0 {
+				cmds = append(cmds, m.openVideo(m.channelVideos[m.channelCursor]))
+			}
+		case "a":
+			if len(m.channelVideos) > 0 {
+				m.queue = append(m.queue, m.channelVideos[m.channelCursor])
+				m.errMsg = ""
+				m.status = fmt.Sprintf("queued · %d in queue", len(m.queue))
+			}
+		case "p":
+			m = m.playQueue()
+		case "q":
+			m = m.pushNav()
+			m.state = queueState
+			m.errMsg = ""
+			m.status = ""
+			cmds = append(cmds, m.loadSelectionFor(m.queue, m.queueCursor))
+			return m, tea.Batch(cmds...)
+		}
+	}
+
+	if down && m.channelCursor < len(m.channelVideos)-1 {
+		m.channelCursor++
+		cmds = append(cmds, m.loadSelectionFor(m.channelVideos, m.channelCursor))
+	}
+	if up && m.channelCursor > 0 {
+		m.channelCursor--
+		cmds = append(cmds, m.loadSelectionFor(m.channelVideos, m.channelCursor))
+	}
+
+	if m.shouldLoadMoreChannel() {
+		m.channelFetchingMore = true
+		cmds = append(cmds, channelCmd(m.channelTitle, m.channelURL, m.channelFetched+searchResults, true))
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m model) shouldLoadMoreChannel() bool {
+	if m.channelLoading || m.channelFetchingMore || len(m.channelVideos) == 0 {
+		return false
+	}
+	l := computeLayout(m.width, m.height)
+	return m.channelCursor >= len(m.channelVideos)-l.avail
+}
+
+func (m model) handleChannelMsg(msg channelMsg) (model, tea.Cmd) {
+	m.channelLoading = false
+	m.channelFetchingMore = false
+	if msg.err != nil {
+		if !msg.more {
+			m.errMsg = msg.err.Error()
+			m.status = ""
+		}
+		return m, nil
+	}
+	if msg.channelTitle != "" {
+		m.channelTitle = msg.channelTitle
+	}
+	if msg.more {
+		m.channelVideos = mergeResults(m.channelVideos, msg.videos)
+		m.channelFetched = msg.limit
+	} else {
+		m.channelVideos = msg.videos
+		m.channelFetched = msg.limit
+		m.channelCursor = 0
+	}
+	m.errMsg = ""
+	m.status = ""
+	if len(m.channelVideos) > 0 {
+		return m, m.loadSelectionFor(m.channelVideos, m.channelCursor)
+	}
+	return m, nil
 }
 
 func (m model) handleSearchMsg(msg searchMsg) (model, tea.Cmd) {
