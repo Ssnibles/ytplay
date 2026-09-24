@@ -167,21 +167,30 @@ func detailCmd(v video) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		out, err := exec.CommandContext(ctx, "yt-dlp",
-			"--no-playlist", "--skip-download", "--no-warnings",
-			"-J", v.watchURL()).Output()
+		var cmd *exec.Cmd
+		if v.isChannel() {
+			cmd = exec.CommandContext(ctx, "yt-dlp",
+				"--flat-playlist", "--playlist-end", "1", "--skip-download", "--no-warnings",
+				"-J", v.channelTargetURL())
+		} else {
+			cmd = exec.CommandContext(ctx, "yt-dlp",
+				"--no-playlist", "--skip-download", "--no-warnings",
+				"-J", v.watchURL())
+		}
+		out, err := cmd.Output()
 		if err != nil {
 			return detailMsg{v.ID, videoDetail{}, err}
 		}
 
 		var d struct {
-			Subs       *int64 `json:"channel_follower_count"`
-			ChViews    *int64 `json:"channel_view_count"`
-			Views      *int64 `json:"view_count"`
-			Likes      *int64 `json:"like_count"`
-			Date       string `json:"upload_date"`
-			ChannelURL string `json:"channel_url"`
-			ChannelID  string `json:"channel_id"`
+			Subs        *int64 `json:"channel_follower_count"`
+			ChViews     *int64 `json:"channel_view_count"`
+			Views       *int64 `json:"view_count"`
+			Likes       *int64 `json:"like_count"`
+			Date        string `json:"upload_date"`
+			ChannelURL  string `json:"channel_url"`
+			ChannelID   string `json:"channel_id"`
+			Description string `json:"description"`
 		}
 		if err := json.Unmarshal(out, &d); err != nil {
 			return detailMsg{v.ID, videoDetail{}, err}
@@ -189,6 +198,7 @@ func detailCmd(v video) tea.Cmd {
 		return detailMsg{v.ID, videoDetail{
 			subs: d.Subs, chViews: d.ChViews, views: d.Views, likes: d.Likes,
 			uploaded: d.Date, channelURL: d.ChannelURL, channelID: d.ChannelID,
+			description: d.Description,
 		}, nil}
 	}
 }

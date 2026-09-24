@@ -738,6 +738,15 @@ func (m model) loadDetailFor(v video) tea.Cmd {
 	if m.detailBusy[v.ID] {
 		return nil
 	}
+	if v.isChannel() && (v.Followers != nil || v.Description != "") {
+		m.details[v.ID] = videoDetail{
+			subs:        v.Followers,
+			channelURL:  v.channelTargetURL(),
+			channelID:   v.ChannelID,
+			description: v.Description,
+		}
+		return nil
+	}
 	m.detailBusy[v.ID] = true
 	return detailCmd(v)
 }

@@ -13,25 +13,30 @@ type thumbInfo struct {
 }
 
 type video struct {
-	ID         string      `json:"id"`
-	Title      string      `json:"title"`
-	URL        string      `json:"url"`
-	Channel    string      `json:"channel"`
-	Uploader   string      `json:"uploader"`
-	Duration   *float64    `json:"duration"`
-	ChannelID  string      `json:"channel_id"`
-	ChannelURL string      `json:"channel_url"`
-	IEKey      string      `json:"ie_key"`
-	Thumbnails []thumbInfo `json:"thumbnails"`
+	ID          string      `json:"id"`
+	Title       string      `json:"title"`
+	URL         string      `json:"url"`
+	Channel     string      `json:"channel"`
+	Uploader    string      `json:"uploader"`
+	Duration    *float64    `json:"duration"`
+	ChannelID   string      `json:"channel_id"`
+	ChannelURL  string      `json:"channel_url"`
+	IEKey       string      `json:"ie_key"`
+	Thumbnails  []thumbInfo `json:"thumbnails"`
+	Followers   *int64      `json:"channel_follower_count"`
+	Description string      `json:"description"`
 }
 
 func (v video) thumbURL() string {
-	if len(v.Thumbnails) > 0 {
-		best := v.Thumbnails[len(v.Thumbnails)-1].URL
-		if strings.HasPrefix(best, "//") {
-			return "https:" + best
+	if v.isChannel() {
+		if len(v.Thumbnails) > 0 {
+			best := v.Thumbnails[len(v.Thumbnails)-1].URL
+			if strings.HasPrefix(best, "//") {
+				return "https:" + best
+			}
+			return best
 		}
-		return best
+		return ""
 	}
 	return fmt.Sprintf("https://i.ytimg.com/vi/%s/mqdefault.jpg", v.ID)
 }
@@ -107,13 +112,14 @@ func (v video) duration() string {
 // because YouTube omits them for some videos/channels (hidden subscriber
 // counts, unlisted views, …).
 type videoDetail struct {
-	subs       *int64 // channel subscriber count
-	chViews    *int64 // total views across all the channel's videos
-	views      *int64 // views on this video
-	likes      *int64 // likes on this video
-	uploaded   string // upload date, YYYYMMDD
-	channelURL string // canonical channel URL
-	channelID  string // channel id (fallback when URL is missing)
+	subs        *int64 // channel subscriber count
+	chViews     *int64 // total views across all the channel's videos
+	views       *int64 // views on this video
+	likes       *int64 // likes on this video
+	uploaded    string // upload date, YYYYMMDD
+	channelURL  string // canonical channel URL
+	channelID   string // channel id (fallback when URL is missing)
+	description string // channel description
 }
 
 func (d videoDetail) date() string {
@@ -158,6 +164,14 @@ func (d videoDetail) lines(width int) []string {
 	}
 	if len(detail) > 0 {
 		out = append(out, hint(strings.Join(detail, " · "), width))
+	}
+	if d.description != "" {
+		for _, ln := range strings.Split(d.description, "\n") {
+			ln = strings.TrimSpace(ln)
+			if ln != "" {
+				out = append(out, hint(ln, width))
+			}
+		}
 	}
 	return out[:min(len(out), detailLines)]
 }

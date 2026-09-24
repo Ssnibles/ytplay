@@ -137,6 +137,9 @@ var httpClient = &http.Client{Timeout: 15 * time.Second}
 
 func fetchThumb(v video) ([]byte, error) {
 	url := v.thumbURL()
+	if url == "" {
+		return nil, fmt.Errorf("no thumbnail url")
+	}
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err

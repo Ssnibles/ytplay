@@ -107,3 +107,43 @@ func TestVideoMethods(t *testing.T) {
 		t.Errorf("channel fallback = %q, want MyUploader", got)
 	}
 }
+
+func TestThumbURL(t *testing.T) {
+	// Videos always use mqdefault.jpg for reliable JPEG decoding even if Thumbnails is populated
+	vid := video{
+		ID: "vid123",
+		Thumbnails: []thumbInfo{
+			{URL: "https://i.ytimg.com/vi/vid123/hq720.jpg?sqp=..."},
+		},
+	}
+	if got := vid.thumbURL(); got != "https://i.ytimg.com/vi/vid123/mqdefault.jpg" {
+		t.Fatalf("video thumbURL = %q, want mqdefault JPEG url", got)
+	}
+
+	// Channels use their avatar thumbnail
+	ch := video{
+		ID:         "UC123",
+		IEKey:      "YoutubeTab",
+		Thumbnails: []thumbInfo{{URL: "//yt3.ggpht.com/avatar.jpg"}},
+	}
+	if got := ch.thumbURL(); got != "https://yt3.ggpht.com/avatar.jpg" {
+		t.Fatalf("channel thumbURL = %q, want normalized https avatar url", got)
+	}
+}
+
+func TestChannelDetailLines(t *testing.T) {
+	d := videoDetail{
+		subs:        i64p(21300000),
+		description: "Tech reviews and gadgets\nNYC",
+	}
+	lines := d.lines(60)
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 lines, got %d: %v", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "21.3M subscribers") {
+		t.Errorf("line 0 = %q, want subscriber count", lines[0])
+	}
+	if !strings.Contains(lines[1], "Tech reviews and gadgets") {
+		t.Errorf("line 1 = %q, want description", lines[1])
+	}
+}
