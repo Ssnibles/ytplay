@@ -116,7 +116,7 @@ func renderThumbData(img image.Image, cols, rows int, proto imgProto) (string, e
 		Protocol(proto.protocol()).
 		Width(cols).
 		Height(rows).
-		Scale(termimg.ScaleFill).
+		Scale(termimg.ScaleFit).
 		PNG(true)
 	if proto == protoKitty {
 		ti = ti.UseUnicode(true)

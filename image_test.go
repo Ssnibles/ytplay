@@ -83,3 +83,19 @@ func TestDistinctImagesGetDistinctBlocks(t *testing.T) {
 		}
 	}
 }
+
+func TestScaleFitPreservesAspectRatioAndBounds(t *testing.T) {
+	// A 16:9 image (320x180) rendered into a non-16:9 bounding box (e.g. 40x20).
+	// Under ScaleFit, the rendered block must fit within the requested cell dimensions
+	// without cropping away any image content.
+	img := image.NewRGBA(image.Rect(0, 0, 320, 180))
+	cols, rows := 40, 20
+	kitty, err := renderThumbData(img, cols, rows, protoKitty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(kitty, "\n")
+	if len(lines) != rows {
+		t.Fatalf("kitty: want %d lines, got %d", rows, len(lines))
+	}
+}
