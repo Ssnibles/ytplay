@@ -252,3 +252,79 @@ func TestMaxDescScroll(t *testing.T) {
 	}
 }
 
+func TestPlaylistAndChannelDetection(t *testing.T) {
+	// YouTube playlist results with YoutubeTab extractor
+	p1 := video{
+		ID:    "PL8mG-RkN2uTyhe6fxWpnsHv53Y1I-K3yu",
+		Title: "Switching to Linux Challenge!",
+		IEKey: "YoutubeTab",
+		URL:   "https://www.youtube.com/playlist?list=PL8mG-RkN2uTyhe6fxWpnsHv53Y1I-K3yu",
+		Thumbnails: []thumbInfo{
+			{URL: "https://i.ytimg.com/vi/placeholder/hqdefault.jpg"},
+		},
+	}
+	if !p1.isPlaylist() {
+		t.Errorf("p1 should be detected as playlist")
+	}
+	if p1.isChannel() {
+		t.Errorf("p1 should NOT be detected as channel")
+	}
+	if got := p1.duration(); got != "Playlist" {
+		t.Errorf("p1 duration = %q, want Playlist", got)
+	}
+	if got := p1.thumbURL(); got != "https://i.ytimg.com/vi/placeholder/hqdefault.jpg" {
+		t.Errorf("p1 thumbURL = %q, want thumbnail URL", got)
+	}
+
+	// Playlist with OLAK5uy_ ID
+	p2 := video{
+		ID:    "OLAK5uy_k12345",
+		Title: "Album Playlist",
+	}
+	if !p2.isPlaylist() {
+		t.Errorf("p2 should be detected as playlist")
+	}
+	if p2.isChannel() {
+		t.Errorf("p2 should NOT be detected as channel")
+	}
+
+	// Real YouTube channel result with YoutubeTab extractor
+	chReal := video{
+		ID:    "UCXuqSBlHAE6Xw-yeJA0Tunw",
+		Title: "Linus Tech Tips",
+		IEKey: "YoutubeTab",
+		URL:   "https://www.youtube.com/channel/UCXuqSBlHAE6Xw-yeJA0Tunw",
+	}
+	if chReal.isPlaylist() {
+		t.Errorf("chReal should NOT be detected as playlist")
+	}
+	if !chReal.isChannel() {
+		t.Errorf("chReal should be detected as channel")
+	}
+	if got := chReal.duration(); got != "Channel" {
+		t.Errorf("chReal duration = %q, want Channel", got)
+	}
+
+	// Regular video result with watch URL
+	vid := video{
+		ID:       "kluoZ9RhmVo",
+		Title:    "FINE! I'll Try Linux",
+		IEKey:    "Youtube",
+		URL:      "https://www.youtube.com/watch?v=kluoZ9RhmVo",
+		Duration: fptr(1700),
+	}
+	if vid.isPlaylist() {
+		t.Errorf("vid should NOT be detected as playlist")
+	}
+	if vid.isChannel() {
+		t.Errorf("vid should NOT be detected as channel")
+	}
+	if got := vid.duration(); got != "28:20" {
+		t.Errorf("vid duration = %q, want 28:20", got)
+	}
+}
+
+func fptr(f float64) *float64 {
+	return &f
+}
+

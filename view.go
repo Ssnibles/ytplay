@@ -50,14 +50,23 @@ func (m model) viewPrompt() string {
 	if len(m.history) > 0 {
 		hints = append(hints,
 			greyHintStyle.Render(
-				fmt.Sprintf("Ctrl+P / Ctrl+N to recall past searches (%d)", len(m.history))),
+				fmt.Sprintf("Ctrl+P / Ctrl+N or ↑ / ↓ to recall past searches (%d)", len(m.history))),
 		)
 	}
+
+	boxW := 46
+	if m.width > 60 {
+		boxW = 56
+		if boxW > m.width-8 {
+			boxW = m.width - 8
+		}
+	}
+	boxStyle := promptBoxStyle.Width(boxW)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
 		lipgloss.JoinVertical(lipgloss.Center,
 			m.titleLine(),
-			promptBoxStyle.Render(strings.Join(content, "\n")),
+			boxStyle.Render(strings.Join(content, "\n")),
 			strings.Join(hints, "\n")))
 }
 
@@ -73,17 +82,26 @@ func (m model) viewQueue() string {
 
 	// The queue page reuses the exact results layout: header, bar, the two
 	// content panes (list + preview), a hint footer, and status/errors.
-	header := headerStyle.Render(
-		lipgloss.JoinHorizontal(lipgloss.Left,
-			m.titleLine(),
-			dimStyle.Render(fmt.Sprintf(" Queue · %d videos", len(m.queue))),
-		),
-	)
+	headerParts := []string{
+		m.titleLine(),
+		dimStyle.Render(fmt.Sprintf(" Queue · %d videos", len(m.queue))),
+	}
+	if isMPVRunning() {
+		headerParts = append(headerParts, mpvLiveStyle.Render(" · ● mpv active"))
+	}
+	header := headerStyle.Render(lipgloss.JoinHorizontal(lipgloss.Left, headerParts...))
 
-	bar := "Up next"
-	hint := ""
+	bar := barPrefixStyle.Render("Queue: ") + barValueStyle.Render("Up next")
+	if isMPVRunning() && len(m.queue) > 0 {
+		bar = barPrefixStyle.Render("Playing: ") + barValueStyle.Render(truncate(m.queue[0].Title, l.leftW-12))
+	}
+	hint := "Esc back · / search · press a on any video to add to queue"
 	if len(m.queue) > 0 {
-		hint = "j/k move · K/J reorder · x remove · Enter play · p play all · c copy · o open · / search · Esc back"
+		playVerb := "play"
+		if isMPVRunning() {
+			playVerb = "enqueue"
+		}
+		hint = fmt.Sprintf("j/k move · K/J reorder · x remove · X clear · Enter %s · p %s all · c copy · o open · Esc back", playVerb, playVerb)
 	}
 	empty := ""
 	if len(m.queue) == 0 && m.errMsg == "" {
@@ -96,27 +114,49 @@ func (m model) viewQueue() string {
 // actionHints summarises the results-screen key bindings for the footer.
 func (m model) actionHints() string {
 	if m.focusPane == previewPane {
-		return "j/k or ↑/↓ scroll desc · h/← list · Enter channel · o open · / search · Esc back"
+		scrollInfo := ""
+		var currentVideo *video
+		if m.state == queueState && len(m.queue) > 0 {
+			currentVideo = &m.queue[m.queueCursor]
+		} else if m.state == channelState && len(m.channelVideos) > 0 {
+			currentVideo = &m.channelVideos[m.channelCursor]
+		} else if len(m.filtered) > 0 {
+			currentVideo = &m.filtered[m.cursor]
+		}
+		if currentVideo != nil {
+			maxS := m.maxPreviewScroll(*currentVideo)
+			if maxS > 0 {
+				scrollInfo = fmt.Sprintf(" [%d/%d]", m.descScroll, maxS)
+			}
+		}
+		return fmt.Sprintf("j/k scroll desc%s · h/← list · Enter channel · o video · O channel · / search · Esc back", scrollInfo)
 	}
-	return "Enter play · a queue · l/→ details · Tab focus · c copy · o open · / search"
+	playVerb := "play"
+	if isMPVRunning() {
+		playVerb = "enqueue"
+	}
+	return fmt.Sprintf("Enter %s · a queue · q queue view · l/→ details · Tab focus · c copy · o open · / search", playVerb)
 }
 
 func (m model) viewResults() string {
 	l := computeLayout(m.width, m.height)
 
-	header := headerStyle.Render(
-		lipgloss.JoinHorizontal(lipgloss.Left,
-			m.titleLine(),
-			dimStyle.Render(fmt.Sprintf(" %d results", len(m.filtered))),
-			accentStyle.Render(fmt.Sprintf(" · %d queued", len(m.queue))),
-		),
-	)
+	var headerParts []string
+	headerParts = append(headerParts, m.titleLine())
+	headerParts = append(headerParts, dimStyle.Render(fmt.Sprintf(" %d results", len(m.filtered))))
+	if len(m.queue) > 0 {
+		headerParts = append(headerParts, accentStyle.Render(fmt.Sprintf(" · %d queued", len(m.queue))))
+	}
+	if isMPVRunning() {
+		headerParts = append(headerParts, mpvLiveStyle.Render(" · ● mpv active"))
+	}
+	header := headerStyle.Render(lipgloss.JoinHorizontal(lipgloss.Left, headerParts...))
 
 	// The input row is replaced by a plain read-only line here: typing is
 	// ignored on the results screen (/ returns to the editable prompt).
-	bar := "Search: " + m.query
+	bar := barPrefixStyle.Render("Search: ") + barValueStyle.Render(m.query)
 	if m.fetchingMore {
-		bar += "  ·  loading more…"
+		bar += dimStyle.Render("  ·  loading more…")
 	}
 
 	hint := ""
@@ -134,18 +174,21 @@ func (m model) viewResults() string {
 func (m model) viewChannel() string {
 	l := computeLayout(m.width, m.height)
 
-	header := headerStyle.Render(
-		lipgloss.JoinHorizontal(lipgloss.Left,
-			m.titleLine(),
-			dimStyle.Render(fmt.Sprintf(" Channel · %s", m.channelTitle)),
-			dimStyle.Render(fmt.Sprintf(" · %d videos", len(m.channelVideos))),
-			accentStyle.Render(fmt.Sprintf(" · %d queued", len(m.queue))),
-		),
-	)
+	var headerParts []string
+	headerParts = append(headerParts, m.titleLine())
+	headerParts = append(headerParts, dimStyle.Render(fmt.Sprintf(" Channel · %s", truncate(m.channelTitle, 30))))
+	headerParts = append(headerParts, dimStyle.Render(fmt.Sprintf(" · %d videos", len(m.channelVideos))))
+	if len(m.queue) > 0 {
+		headerParts = append(headerParts, accentStyle.Render(fmt.Sprintf(" · %d queued", len(m.queue))))
+	}
+	if isMPVRunning() {
+		headerParts = append(headerParts, mpvLiveStyle.Render(" · ● mpv active"))
+	}
+	header := headerStyle.Render(lipgloss.JoinHorizontal(lipgloss.Left, headerParts...))
 
-	bar := "Channel: " + m.channelTitle
+	bar := barPrefixStyle.Render("Channel: ") + barValueStyle.Render(m.channelTitle)
 	if m.channelFetchingMore {
-		bar += "  ·  loading more…"
+		bar += dimStyle.Render("  ·  loading more…")
 	}
 
 	hint := ""

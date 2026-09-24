@@ -2,12 +2,26 @@ package main
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+var isolatedTestSocket string
+
+func TestMain(m *testing.M) {
+	tmpDir, err := os.MkdirTemp("", "ytplay-test-*")
+	if err == nil {
+		isolatedTestSocket = filepath.Join(tmpDir, "isolated-test.sock")
+		customMPVSocket = isolatedTestSocket
+		defer os.RemoveAll(tmpDir)
+	}
+	resetMPVRunningCache()
+	os.Exit(m.Run())
+}
 
 var errTest = errors.New("boom")
 

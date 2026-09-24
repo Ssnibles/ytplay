@@ -2,9 +2,11 @@ package main
 
 import (
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -73,6 +75,7 @@ type model struct {
 	navStack            []navPage
 	status              string
 	errMsg              string
+	mpvTicking          bool
 }
 
 func (m model) currentNavPage() navPage {
@@ -178,3 +181,38 @@ func (m model) findVideo(id string) (video, bool) {
 	}
 	return video{}, false
 }
+
+func (m model) isQueued(id string) bool {
+	for _, v := range m.queue {
+		if v.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (m model) removeQueueByID(id string) model {
+	for i, v := range m.queue {
+		if v.ID == id {
+			return m.removeQueueAt(i)
+		}
+	}
+	return m
+}
+
+type mpvTickMsg struct{}
+
+func mpvTickCmd() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+		return mpvTickMsg{}
+	})
+}
+
+func (m model) startMPVTick() (model, tea.Cmd) {
+	if m.mpvTicking || !isMPVRunning() {
+		return m, nil
+	}
+	m.mpvTicking = true
+	return m, mpvTickCmd()
+}
+

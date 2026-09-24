@@ -1,8 +1,14 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"net"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -97,6 +103,14 @@ func TestPrioritizeChannels(t *testing.T) {
 	if len(merged) != 3 || merged[0].ID != "UC111" {
 		t.Fatalf("merge did not prioritize channel: %v", merged)
 	}
+
+	// 5. Playlists (even with IEKey: YoutubeTab) are not prioritized as channels
+	p1 := video{ID: "PL123", Title: "Playlist 1", IEKey: "YoutubeTab", URL: "https://www.youtube.com/playlist?list=PL123"}
+	input = []video{v1, p1, c1}
+	got = prioritizeChannels(input)
+	if len(got) != 3 || got[0].ID != "UC111" || got[1].ID != "v1" || got[2].ID != "PL123" {
+		t.Fatalf("playlist should not be prioritized as channel: %v", got)
+	}
 }
 
 func TestChannelVideosURL(t *testing.T) {
@@ -115,5 +129,136 @@ func TestChannelVideosURL(t *testing.T) {
 		if got := channelVideosURL(c.in); got != c.want {
 			t.Errorf("channelVideosURL(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func startMockMPVServer(t *testing.T, sockPath string) (chan []string, func()) {
+	t.Helper()
+	_ = os.Remove(sockPath)
+	l, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("failed to listen on socket %s: %v", sockPath, err)
+	}
+	received := make(chan []string, 10)
+
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				scanner := bufio.NewScanner(c)
+				for scanner.Scan() {
+					line := scanner.Bytes()
+					var msg struct {
+						Command   []interface{} `json:"command"`
+						RequestID int           `json:"request_id"`
+					}
+					if err := json.Unmarshal(line, &msg); err == nil {
+						cmdStrings := make([]string, len(msg.Command))
+						for idx, arg := range msg.Command {
+							cmdStrings[idx] = fmt.Sprint(arg)
+						}
+						received <- cmdStrings
+						if len(cmdStrings) >= 2 && cmdStrings[0] == "get_property" && cmdStrings[1] == "playlist-pos" {
+							_, _ = c.Write([]byte(fmt.Sprintf(`{"request_id":%d,"data":0,"error":"success"}`+"\n", msg.RequestID)))
+						} else if len(cmdStrings) >= 2 && cmdStrings[0] == "get_property" && cmdStrings[1] == "path" {
+							_, _ = c.Write([]byte(fmt.Sprintf(`{"request_id":%d,"data":"","error":"success"}`+"\n", msg.RequestID)))
+						} else {
+							// Simulate realistic mpv emitting asynchronous event before or between command responses
+							_, _ = c.Write([]byte(`{"event":"tracks-changed"}` + "\n"))
+							_, _ = c.Write([]byte(fmt.Sprintf(`{"request_id":%d,"error":"success"}`+"\n", msg.RequestID)))
+						}
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	cleanup := func() {
+		_ = l.Close()
+		_ = os.Remove(sockPath)
+		resetMPVRunningCache()
+	}
+	return received, cleanup
+}
+
+func TestMPVIPC(t *testing.T) {
+	resetMPVRunningCache()
+	tmpDir := t.TempDir()
+	sock := filepath.Join(tmpDir, "test-mpv.sock")
+	customMPVSocket = sock
+	defer func() {
+		customMPVSocket = isolatedTestSocket
+		resetMPVRunningCache()
+	}()
+
+	// 1. When MPV is not running
+	if isMPVRunning() {
+		t.Fatal("isMPVRunning should return false when no mpv instance is listening")
+	}
+
+	// 2. Start mock MPV server
+	recv, cleanup := startMockMPVServer(t, sock)
+	defer cleanup()
+
+	// Wait briefly for server to bind
+	time.Sleep(20 * time.Millisecond)
+	resetMPVRunningCache()
+
+	if !isMPVRunning() {
+		t.Fatal("isMPVRunning should return true when mock mpv is listening")
+	}
+
+	// 3. Test enqueueToMPV with single URL
+	testURL := "https://www.youtube.com/watch?v=test1234"
+	if err := enqueueToMPV(testURL); err != nil {
+		t.Fatalf("enqueueToMPV failed: %v", err)
+	}
+
+	select {
+	case cmd := <-recv:
+		if len(cmd) != 3 || cmd[0] != "loadfile" || cmd[1] != testURL || cmd[2] != "append-play" {
+			t.Fatalf("unexpected mpv command received: %v", cmd)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for mpv command")
+	}
+
+	// 4. Test enqueueToMPV with multiple URLs (sequential queue handoff)
+	urlA := "https://www.youtube.com/watch?v=vidA"
+	urlB := "https://www.youtube.com/watch?v=vidB"
+	if err := enqueueToMPV(urlA, urlB); err != nil {
+		t.Fatalf("enqueueToMPV with multiple URLs failed: %v", err)
+	}
+	for _, expected := range []string{urlA, urlB} {
+		select {
+		case cmd := <-recv:
+			if len(cmd) != 3 || cmd[0] != "loadfile" || cmd[1] != expected || cmd[2] != "append-play" {
+				t.Fatalf("unexpected mpv command for multiple urls: %v, want url %s", cmd, expected)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for mpv command for %s", expected)
+		}
+	}
+
+	// 5. Test playInMPV auto-enqueues into running MPV
+	enqueued, err := playInMPV(testURL)
+	if err != nil {
+		t.Fatalf("playInMPV failed: %v", err)
+	}
+	if !enqueued {
+		t.Fatal("playInMPV should return enqueued=true when mpv is running")
+	}
+
+	select {
+	case cmd := <-recv:
+		if len(cmd) != 3 || cmd[0] != "loadfile" || cmd[1] != testURL || cmd[2] != "append-play" {
+			t.Fatalf("unexpected mpv command received from playInMPV: %v", cmd)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for mpv command from playInMPV")
 	}
 }

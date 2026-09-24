@@ -1,13 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -172,6 +176,10 @@ func detailCmd(v video) tea.Cmd {
 			cmd = exec.CommandContext(ctx, "yt-dlp",
 				"--flat-playlist", "--playlist-end", "1", "--skip-download", "--no-warnings",
 				"-J", v.channelTargetURL())
+		} else if v.isPlaylist() {
+			cmd = exec.CommandContext(ctx, "yt-dlp",
+				"--flat-playlist", "--playlist-end", "1", "--skip-download", "--no-warnings",
+				"-J", v.watchURL())
 		} else {
 			cmd = exec.CommandContext(ctx, "yt-dlp",
 				"--no-playlist", "--skip-download", "--no-warnings",
@@ -351,14 +359,141 @@ func (m model) openChannel(v video) tea.Cmd {
 	return openURLCmd(m.resolveChannelURL(v))
 }
 
-func playInMPV(urls ...string) error {
+var (
+	customMPVSocket string
+	mpvCheckMu      sync.Mutex
+	lastMPVCheck    time.Time
+	lastMPVState    bool
+)
+
+// resetMPVRunningCache clears the cached mpv state so the next check performs a fresh probe.
+func resetMPVRunningCache() {
+	mpvCheckMu.Lock()
+	lastMPVCheck = time.Time{}
+	lastMPVState = false
+	mpvCheckMu.Unlock()
+}
+
+// mpvSocketPath returns the path to the UNIX domain socket used for mpv IPC.
+func mpvSocketPath() string {
+	if customMPVSocket != "" {
+		return customMPVSocket
+	}
+	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
+		return filepath.Join(runtimeDir, "ytplay-mpv.sock")
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("ytplay-mpv-%d.sock", os.Getuid()))
+}
+
+// isMPVRunning checks whether an mpv instance is actively listening on the IPC socket.
+// It caches results for 250ms to prevent flooding the socket during rapid UI redraws.
+func isMPVRunning() bool {
+	mpvCheckMu.Lock()
+	defer mpvCheckMu.Unlock()
+	if time.Since(lastMPVCheck) < 250*time.Millisecond {
+		return lastMPVState
+	}
+	sock := mpvSocketPath()
+	conn, err := net.DialTimeout("unix", sock, 100*time.Millisecond)
+	lastMPVCheck = time.Now()
+	if err != nil {
+		lastMPVState = false
+		return false
+	}
+	_ = conn.Close()
+	lastMPVState = true
+	return true
+}
+
+// enqueueToMPV sends one or more URLs to the running mpv instance via IPC.
+func enqueueToMPV(urls ...string) error {
+	if len(urls) == 0 {
+		return nil
+	}
+	sock := mpvSocketPath()
+	conn, err := net.DialTimeout("unix", sock, 500*time.Millisecond)
+	if err != nil {
+		mpvCheckMu.Lock()
+		lastMPVState = false
+		lastMPVCheck = time.Now()
+		mpvCheckMu.Unlock()
+		return fmt.Errorf("mpv ipc connect: %w", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	enc := json.NewEncoder(conn)
+	reader := bufio.NewReader(conn)
+
+	for i, u := range urls {
+		reqID := i + 1
+		payload := map[string]interface{}{
+			"command":    []string{"loadfile", u, "append-play"},
+			"request_id": reqID,
+		}
+		if err := enc.Encode(payload); err != nil {
+			return fmt.Errorf("mpv ipc send: %w", err)
+		}
+		// Read until we get the response matching our request_id,
+		// skipping any asynchronous event notifications from mpv / scripts.
+		for {
+			respLine, err := reader.ReadBytes('\n')
+			if err != nil {
+				return fmt.Errorf("mpv ipc response: %w", err)
+			}
+			var resp struct {
+				RequestID int    `json:"request_id"`
+				Error     string `json:"error"`
+				Event     string `json:"event"`
+			}
+			if err := json.Unmarshal(respLine, &resp); err != nil {
+				continue
+			}
+			if resp.Event != "" {
+				// skip asynchronous mpv / script events
+				continue
+			}
+			if resp.RequestID == reqID || resp.RequestID == 0 {
+				if resp.Error != "" && resp.Error != "success" {
+					return fmt.Errorf("mpv error: %s", resp.Error)
+				}
+				break
+			}
+		}
+	}
+	mpvCheckMu.Lock()
+	lastMPVState = true
+	lastMPVCheck = time.Now()
+	mpvCheckMu.Unlock()
+	return nil
+}
+
+// playInMPV plays the given URLs. If an mpv instance is already running with an
+// active IPC socket, the videos are automatically enqueued into it and enqueued=true
+// is returned. Otherwise, a new detached mpv process is spawned and enqueued=false
+// is returned.
+func playInMPV(urls ...string) (bool, error) {
+	if len(urls) == 0 {
+		return false, nil
+	}
+
+	if isMPVRunning() {
+		if err := enqueueToMPV(urls...); err == nil {
+			return true, nil
+		}
+	}
+
+	sock := mpvSocketPath()
+	_ = os.Remove(sock)
+
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
-		return fmt.Errorf("mpv: %w", err)
+		return false, fmt.Errorf("mpv: %w", err)
 	}
 	defer devnull.Close()
 
-	cmd := exec.Command("mpv", urls...)
+	args := append([]string{"--input-ipc-server=" + sock}, urls...)
+	cmd := exec.Command("mpv", args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// Detach mpv from the TUI's streams: stdin would otherwise receive the
 	// keystrokes the TUI is listening for, and mpv's own output would print
@@ -367,7 +502,153 @@ func playInMPV(urls ...string) error {
 	cmd.Stdout = devnull
 	cmd.Stderr = devnull
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("mpv: %w", err)
+		return false, fmt.Errorf("mpv: %w", err)
 	}
-	return nil
+	// Reap the detached process in the background when it terminates so it doesn't linger as a zombie.
+	go func() {
+		_ = cmd.Wait()
+		mpvCheckMu.Lock()
+		lastMPVState = false
+		lastMPVCheck = time.Now()
+		mpvCheckMu.Unlock()
+	}()
+	resetMPVRunningCache()
+	return false, nil
+}
+
+// sendMPVCommand sends a command to mpv over IPC and waits for confirmation.
+func sendMPVCommand(args ...interface{}) error {
+	if !isMPVRunning() {
+		return nil
+	}
+	sock := mpvSocketPath()
+	conn, err := net.DialTimeout("unix", sock, 150*time.Millisecond)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+
+	enc := json.NewEncoder(conn)
+	reader := bufio.NewReader(conn)
+	reqID := 9998
+	payload := map[string]interface{}{
+		"command":    args,
+		"request_id": reqID,
+	}
+	if err := enc.Encode(payload); err != nil {
+		return err
+	}
+
+	for {
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			return err
+		}
+		var resp struct {
+			RequestID int    `json:"request_id"`
+			Error     string `json:"error"`
+			Event     string `json:"event"`
+		}
+		if err := json.Unmarshal(line, &resp); err != nil {
+			continue
+		}
+		if resp.Event != "" {
+			continue
+		}
+		if resp.RequestID == reqID || resp.RequestID == 0 {
+			if resp.Error != "" && resp.Error != "success" {
+				return fmt.Errorf("mpv error: %s", resp.Error)
+			}
+			return nil
+		}
+	}
+}
+
+func removeMPVPlaylistItem(index int) {
+	_ = sendMPVCommand("playlist-remove", index)
+}
+
+func moveMPVPlaylistItem(from, to int) {
+	_ = sendMPVCommand("playlist-move", from, to)
+}
+
+func clearMPVPlaylist() {
+	_ = sendMPVCommand("playlist-clear")
+}
+
+func playMPVPlaylistIndex(index int) {
+	_ = sendMPVCommand("playlist-play-index", index)
+}
+
+// getMPVPlayingInfo queries mpv for the 0-based index of the currently playing playlist entry
+// and the active file path / URL.
+func getMPVPlayingInfo() (pos int, currentPath string) {
+	pos = -1
+	currentPath = ""
+	if !isMPVRunning() {
+		return -1, ""
+	}
+	sock := mpvSocketPath()
+	conn, err := net.DialTimeout("unix", sock, 150*time.Millisecond)
+	if err != nil {
+		return -1, ""
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(300 * time.Millisecond))
+
+	enc := json.NewEncoder(conn)
+	reader := bufio.NewReader(conn)
+
+	_ = enc.Encode(map[string]interface{}{
+		"command":    []string{"get_property", "playlist-pos"},
+		"request_id": 1,
+	})
+	_ = enc.Encode(map[string]interface{}{
+		"command":    []string{"get_property", "path"},
+		"request_id": 2,
+	})
+
+	gotPos := false
+	gotPath := false
+
+	for !gotPos || !gotPath {
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			break
+		}
+		var resp struct {
+			RequestID int         `json:"request_id"`
+			Data      interface{} `json:"data"`
+			Event     string      `json:"event"`
+		}
+		if err := json.Unmarshal(line, &resp); err != nil {
+			continue
+		}
+		if resp.Event != "" {
+			continue
+		}
+		if resp.RequestID == 1 {
+			switch v := resp.Data.(type) {
+			case float64:
+				pos = int(v)
+			case int:
+				pos = v
+			}
+			gotPos = true
+		} else if resp.RequestID == 2 {
+			if s, ok := resp.Data.(string); ok {
+				currentPath = s
+			}
+			gotPath = true
+		}
+	}
+	return pos, currentPath
+}
+
+// getMPVPlaylistPos queries mpv for the 0-based index of the currently playing playlist entry.
+// Returns -1 if mpv is not running or position is unavailable.
+func getMPVPlaylistPos() int {
+	pos, _ := getMPVPlayingInfo()
+	return pos
 }

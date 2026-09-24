@@ -28,7 +28,7 @@ type video struct {
 }
 
 func (v video) thumbURL() string {
-	if v.isChannel() {
+	if v.isChannel() || v.isPlaylist() {
 		if len(v.Thumbnails) > 0 {
 			best := v.Thumbnails[len(v.Thumbnails)-1].URL
 			if strings.HasPrefix(best, "//") {
@@ -41,7 +41,23 @@ func (v video) thumbURL() string {
 	return fmt.Sprintf("https://i.ytimg.com/vi/%s/mqdefault.jpg", v.ID)
 }
 
+func (v video) isPlaylist() bool {
+	if strings.Contains(v.URL, "/playlist") || (strings.Contains(v.URL, "list=") && !strings.Contains(v.URL, "/watch")) {
+		return true
+	}
+	if strings.HasPrefix(v.ID, "PL") || strings.HasPrefix(v.ID, "OLAK5uy_") || strings.HasPrefix(v.ID, "RD") {
+		return true
+	}
+	return false
+}
+
 func (v video) isChannel() bool {
+	if v.isPlaylist() {
+		return false
+	}
+	if strings.Contains(v.URL, "/watch") || strings.Contains(v.URL, "youtu.be") {
+		return false
+	}
 	if strings.EqualFold(v.IEKey, "YoutubeTab") || strings.EqualFold(v.IEKey, "YoutubeChannel") {
 		return true
 	}
@@ -99,6 +115,9 @@ func (v video) channel() string {
 func (v video) duration() string {
 	if v.isChannel() {
 		return "Channel"
+	}
+	if v.isPlaylist() {
+		return "Playlist"
 	}
 	if v.Duration == nil || *v.Duration <= 0 {
 		return "?:??"

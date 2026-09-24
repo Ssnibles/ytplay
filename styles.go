@@ -59,6 +59,17 @@ var (
 	searchingPrefixStyle = lipgloss.NewStyle().Foreground(fg)
 	searchingQueryStyle  = lipgloss.NewStyle().Bold(true).Foreground(fg)
 
+	mpvLiveStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("7ea87f")).
+			Bold(true)
+
+	barPrefixStyle = lipgloss.NewStyle().
+			Foreground(fgMid)
+
+	barValueStyle = lipgloss.NewStyle().
+			Foreground(accent).
+			Bold(true)
+
 	previewTitleStyle         = lipgloss.NewStyle().Bold(true).Foreground(accent)
 	previewChannelStyle       = lipgloss.NewStyle().Foreground(fgMid)
 	previewChannelActiveStyle = lipgloss.NewStyle().

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -844,3 +845,197 @@ func TestChannelAndQueuePaneFocus(t *testing.T) {
 		t.Fatalf("'h' in queue should focus listPane, got %v", (m.(model)).focusPane)
 	}
 }
+
+func TestAutoEnqueueIntoMPV(t *testing.T) {
+	resetMPVRunningCache()
+	tmpDir := t.TempDir()
+	sock := filepath.Join(tmpDir, "test-mpv.sock")
+	customMPVSocket = sock
+	defer func() {
+		customMPVSocket = isolatedTestSocket
+		resetMPVRunningCache()
+	}()
+
+	recv, cleanup := startMockMPVServer(t, sock)
+	defer cleanup()
+
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{
+			{ID: "v1", Title: "Great Song", URL: "https://youtu.be/v1"},
+		},
+	})
+	m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	md := m.(model)
+	if !strings.Contains(md.status, "enqueued") {
+		t.Fatalf("expected status to show enqueued, got %q", md.status)
+	}
+	if !strings.Contains(md.status, "Great Song") {
+		t.Fatalf("expected status to mention title, got %q", md.status)
+	}
+
+	select {
+	case cmd := <-recv:
+		if len(cmd) != 3 || cmd[0] != "loadfile" || cmd[1] != "https://youtu.be/v1" {
+			t.Fatalf("unexpected mpv command: %v", cmd)
+		}
+	default:
+		t.Fatal("expected mpv command to be sent")
+	}
+}
+
+func TestKeyAAutoEnqueuesWhenMPVRunning(t *testing.T) {
+	resetMPVRunningCache()
+	tmpDir := t.TempDir()
+	sock := filepath.Join(tmpDir, "test-mpv.sock")
+	customMPVSocket = sock
+	defer func() {
+		customMPVSocket = isolatedTestSocket
+		resetMPVRunningCache()
+	}()
+
+	recv, cleanup := startMockMPVServer(t, sock)
+	defer cleanup()
+
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{
+			{ID: "v1", Title: "Live Video", URL: "https://youtu.be/v1"},
+		},
+	})
+	m = update(m, keyRunes("a"))
+	md := m.(model)
+	if !strings.Contains(md.status, "enqueued") {
+		t.Fatalf("pressing a while mpv is running should auto-enqueue into mpv, got %q", md.status)
+	}
+
+	select {
+	case cmd := <-recv:
+		if len(cmd) != 3 || cmd[0] != "loadfile" {
+			t.Fatalf("unexpected mpv command: %v", cmd)
+		}
+	default:
+		t.Fatal("expected mpv command to be sent on key a")
+	}
+}
+
+func TestUnqueueKey(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{
+			{ID: "v1", Title: "Video 1"},
+		},
+	})
+	// Add to queue (when mpv is not running)
+	m = update(m, keyRunes("a"))
+	if len(m.(model).queue) != 1 {
+		t.Fatalf("expected 1 item in queue, got %d", len(m.(model).queue))
+	}
+	// Press x to remove from queue
+	m = update(m, keyRunes("x"))
+	md := m.(model)
+	if len(md.queue) != 0 {
+		t.Fatalf("expected queue to be empty after x, got %d", len(md.queue))
+	}
+	if !strings.Contains(md.status, "removed") {
+		t.Fatalf("status should confirm removal, got %q", md.status)
+	}
+}
+
+func TestQueueClearKey(t *testing.T) {
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = update(m, searchMsg{
+		videos: []video{
+			{ID: "v1", Title: "Video 1"},
+			{ID: "v2", Title: "Video 2"},
+		},
+	})
+	m = update(m, keyRunes("a"))
+	m = update(m, keyRunes("j"))
+	m = update(m, keyRunes("a"))
+	if len(m.(model).queue) != 2 {
+		t.Fatalf("expected 2 in queue, got %d", len(m.(model).queue))
+	}
+	// Open queue view
+	m = update(m, keyRunes("q"))
+	// Press X to clear
+	m = update(m, keyRunes("X"))
+	md := m.(model)
+	if len(md.queue) != 0 {
+		t.Fatalf("expected queue to be empty after X, got %d", len(md.queue))
+	}
+	if md.status != "cleared queue" {
+		t.Fatalf("expected status 'cleared queue', got %q", md.status)
+	}
+}
+
+func TestPromptArrowHistory(t *testing.T) {
+	useTempHistory(t)
+	m := tea.Model(initialModel(nil))
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	// Search 1
+	m = update(m, keyRunes("first search"))
+	m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = update(m, searchMsg{videos: []video{{ID: "1", Title: "One"}}})
+	// Slash navigation to open a fresh prompt
+	m = update(m, keyRunes("/"))
+	// Search 2
+	m = update(m, keyRunes("second search"))
+	m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = update(m, searchMsg{videos: []video{{ID: "2", Title: "Two"}}})
+	// Slash navigation to empty prompt
+	m = update(m, keyRunes("/"))
+
+	// Press KeyUp to recall history
+	m = update(m, tea.KeyMsg{Type: tea.KeyUp})
+	md := m.(model)
+	if md.input.Value() != "second search" {
+		t.Fatalf("KeyUp should recall last search, got %q", md.input.Value())
+	}
+	// Press KeyUp again to recall earlier search
+	m = update(m, tea.KeyMsg{Type: tea.KeyUp})
+	md = m.(model)
+	if md.input.Value() != "first search" {
+		t.Fatalf("second KeyUp should recall 'first search', got %q", md.input.Value())
+	}
+	// Press KeyDown to move forward
+	m = update(m, tea.KeyMsg{Type: tea.KeyDown})
+	md = m.(model)
+	if md.input.Value() != "second search" {
+		t.Fatalf("KeyDown should recall 'second search', got %q", md.input.Value())
+	}
+}
+
+func TestMPVActiveIndicatorInHeaderAndHints(t *testing.T) {
+	resetMPVRunningCache()
+	tmpDir := t.TempDir()
+	sock := filepath.Join(tmpDir, "test-mpv.sock")
+	customMPVSocket = sock
+	defer func() {
+		customMPVSocket = isolatedTestSocket
+		resetMPVRunningCache()
+	}()
+
+	_, cleanup := startMockMPVServer(t, sock)
+	defer cleanup()
+
+	m := model{
+		state:    resultsState,
+		width:    120,
+		height:   40,
+		filtered: []video{{ID: "v1", Title: "Test Video"}},
+	}
+	out := m.viewResults()
+	if !strings.Contains(out, "mpv active") {
+		t.Fatalf("header should show mpv active indicator when mpv is running:\n%s", out)
+	}
+	hints := m.actionHints()
+	if !strings.Contains(hints, "Enter enqueue") {
+		t.Fatalf("hints should say 'Enter enqueue' when mpv is running, got %q", hints)
+	}
+}
+
