@@ -14,49 +14,47 @@ func queueURLs(queue []video) []string {
 	return urls
 }
 
-// syncQueueWithMPV queries mpv to remove completed or skipped videos from the active queue.
+// syncQueueWithMPV drops videos that mpv has already played. It identifies the
+// currently playing entry by URL and removes everything before it. It must not
+// trust mpv's playlist position as an index into ytplay's queue: the two lists
+// can diverge (a fresh session, a replaced playlist, an mpv that outlived a
+// previous run), and using the raw position silently deleted queue entries.
 func (m model) syncQueueWithMPV() model {
 	if !isMPVRunning() || len(m.queue) == 0 {
 		return m
 	}
-	pos, currentPath := getMPVPlayingInfo()
+	_, currentPath := getMPVPlayingInfo()
+	if currentPath == "" {
+		return m
+	}
 
 	dropCount := 0
-	if currentPath != "" {
-		for i, v := range m.queue {
-			if v.watchURL() == currentPath || v.URL == currentPath || (v.ID != "" && strings.Contains(currentPath, v.ID)) {
-				dropCount = i
-				break
-			}
+	found := false
+	for i, v := range m.queue {
+		if v.watchURL() == currentPath || v.URL == currentPath || (v.ID != "" && strings.Contains(currentPath, v.ID)) {
+			dropCount = i
+			found = true
+			break
 		}
 	}
-
-	if dropCount == 0 && pos > 0 && pos <= len(m.queue) {
-		dropCount = pos
+	if !found || dropCount <= 0 {
+		return m
 	}
 
-	if dropCount > 0 {
-		toRemoveInMPV := dropCount
-		if pos >= 0 && pos < toRemoveInMPV {
-			toRemoveInMPV = pos
-		}
-		for i := 0; i < toRemoveInMPV; i++ {
-			removeMPVPlaylistItem(0)
-		}
-
-		if dropCount > len(m.queue) {
-			dropCount = len(m.queue)
-		}
-		m.queue = m.queue[dropCount:]
-		m.queueCursor -= dropCount
-		if m.queueCursor < 0 {
-			m.queueCursor = 0
-		}
-		if m.queueCursor >= len(m.queue) && len(m.queue) > 0 {
-			m.queueCursor = len(m.queue) - 1
-		} else if len(m.queue) == 0 {
-			m.queueCursor = 0
-		}
+	// Everything before the current entry is finished; mirror that in mpv too.
+	for i := 0; i < dropCount; i++ {
+		removeMPVPlaylistItem(0)
+	}
+	if dropCount > len(m.queue) {
+		dropCount = len(m.queue)
+	}
+	m.queue = m.queue[dropCount:]
+	m.queueCursor -= dropCount
+	if m.queueCursor < 0 {
+		m.queueCursor = 0
+	}
+	if m.queueCursor >= len(m.queue) && len(m.queue) > 0 {
+		m.queueCursor = len(m.queue) - 1
 	}
 	return m
 }
@@ -70,17 +68,13 @@ func (m model) playQueue() model {
 		return m
 	}
 	urls := queueURLs(m.queue)
-	enqueued, err := playInMPV(urls...)
-	if err != nil {
+	if err := playNowInMPV(urls...); err != nil {
 		m.errMsg = err.Error()
 		return m
 	}
 	m.errMsg = ""
-	if enqueued {
-		m.status = fmt.Sprintf("enqueued %d queued videos into mpv", len(urls))
-	} else {
-		m.status = fmt.Sprintf("playing %d queued videos", len(urls))
-	}
+	m.queueCursor = 0
+	m.status = fmt.Sprintf("playing %d queued videos", len(urls))
 	return m
 }
 
@@ -158,7 +152,7 @@ func (m model) clearQueue() model {
 }
 
 // playFromQueue plays the selected queued video followed by the remainder of the
-// queue so mpv autoplays sequentially. It preserves the launched videos in the queue.
+// queue so mpv autoplays sequentially. It trims the queue down to the selection.
 func (m model) playFromQueue() model {
 	if len(m.queue) == 0 {
 		return m
@@ -166,30 +160,20 @@ func (m model) playFromQueue() model {
 	v := m.queue[m.queueCursor]
 	remaining := m.queue[m.queueCursor:]
 	urls := queueURLs(remaining)
-	enqueued, err := playInMPV(urls...)
-	if err != nil {
+	if err := playNowInMPV(urls...); err != nil {
 		m.status = ""
 		m.errMsg = err.Error()
 		return m
 	}
-	// If starting fresh from an offset, slice queue to start from that video
-	if !enqueued && m.queueCursor > 0 {
-		m.queue = m.queue[m.queueCursor:]
+	if m.queueCursor > 0 {
+		m.queue = remaining
 		m.queueCursor = 0
 	}
 	m.errMsg = ""
-	if enqueued {
-		if len(urls) > 1 {
-			m.status = fmt.Sprintf("enqueued %d videos into mpv", len(urls))
-		} else {
-			m.status = fmt.Sprintf("enqueued %q into mpv", v.Title)
-		}
+	if len(urls) > 1 {
+		m.status = fmt.Sprintf("playing %q + %d more in mpv", v.Title, len(urls)-1)
 	} else {
-		if len(urls) > 1 {
-			m.status = fmt.Sprintf("playing %q + %d more in mpv", v.Title, len(urls)-1)
-		} else {
-			m.status = fmt.Sprintf("playing %q", v.Title)
-		}
+		m.status = fmt.Sprintf("playing %q", v.Title)
 	}
 	return m
 }

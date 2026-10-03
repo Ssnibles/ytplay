@@ -113,25 +113,38 @@ func TestPlayFromQueue(t *testing.T) {
 
 	m = m.playFromQueue()
 
-	// Should have enqueued v1 and v2 into mpv for sequential autoplay
-	for _, wantURL := range []string{"https://youtu.be/v1", "https://youtu.be/v2"} {
+	// The selected video plays immediately and the rest are appended without
+	// stealing playback, so mpv's playlist is replaced with [v1, v2].
+	want := [][]string{
+		{"loadfile", "https://youtu.be/v1"},
+		{"loadfile", "https://youtu.be/v2", "append"},
+	}
+	for _, wantCmd := range want {
 		select {
 		case cmd := <-recv:
-			if len(cmd) != 3 || cmd[0] != "loadfile" || cmd[1] != wantURL || cmd[2] != "append-play" {
-				t.Fatalf("unexpected mpv command: %v, want url %s", cmd, wantURL)
+			if len(cmd) != len(wantCmd) {
+				t.Fatalf("unexpected mpv command: %v, want %v", cmd, wantCmd)
+			}
+			for i := range wantCmd {
+				if cmd[i] != wantCmd[i] {
+					t.Fatalf("unexpected mpv command: %v, want %v", cmd, wantCmd)
+				}
 			}
 		case <-time.After(time.Second):
-			t.Fatalf("timed out waiting for mpv command for %s", wantURL)
+			t.Fatalf("timed out waiting for mpv command %v", wantCmd)
 		}
 	}
 
-	// All queued items are preserved in the queue interface
-	if len(m.queue) != 3 || m.queue[0].ID != "v0" || m.queue[1].ID != "v1" || m.queue[2].ID != "v2" {
-		t.Fatalf("queue should retain all items in interface, got: %v", m.queue)
+	// Starting from an offset trims the queue to the selection.
+	if len(m.queue) != 2 || m.queue[0].ID != "v1" || m.queue[1].ID != "v2" {
+		t.Fatalf("queue should trim to the selection, got: %v", m.queue)
+	}
+	if m.queueCursor != 0 {
+		t.Fatalf("cursor should reset to 0, got %d", m.queueCursor)
 	}
 }
 
-func TestSyncQueueWithMPVAdvances(t *testing.T) {
+func TestSyncQueueWithMPVIgnoresStalePosition(t *testing.T) {
 	resetMPVRunningCache()
 	tmpDir := t.TempDir()
 	sock := filepath.Join(tmpDir, "test-mpv.sock")
@@ -169,7 +182,7 @@ func TestSyncQueueWithMPVAdvances(t *testing.T) {
 							cmdStrings[idx] = fmt.Sprint(arg)
 						}
 						if len(cmdStrings) >= 2 && cmdStrings[0] == "get_property" && cmdStrings[1] == "playlist-pos" {
-							_, _ = c.Write([]byte(fmt.Sprintf(`{"request_id":%d,"data":1,"error":"success"}`+"\n", msg.RequestID)))
+							_, _ = c.Write([]byte(fmt.Sprintf(`{"request_id":%d,"data":5,"error":"success"}`+"\n", msg.RequestID)))
 						} else if len(cmdStrings) >= 2 && cmdStrings[0] == "get_property" && cmdStrings[1] == "path" {
 							_, _ = c.Write([]byte(fmt.Sprintf(`{"request_id":%d,"data":"","error":"success"}`+"\n", msg.RequestID)))
 						} else if len(cmdStrings) >= 2 && cmdStrings[0] == "playlist-remove" {
@@ -196,22 +209,17 @@ func TestSyncQueueWithMPVAdvances(t *testing.T) {
 
 	m = m.syncQueueWithMPV()
 
-	// Should send playlist-remove 0 to mpv
+	// mpv reports a playlist position but no current path (a divergent or stale
+	// instance). The position must never be used as an index into ytplay's queue.
 	select {
 	case cmd := <-removed:
-		if len(cmd) != 2 || cmd[0] != "playlist-remove" || cmd[1] != "0" {
-			t.Fatalf("expected playlist-remove 0, got: %v", cmd)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for playlist-remove command")
+		t.Fatalf("stale position must not remove playlist items, got: %v", cmd)
+	case <-time.After(50 * time.Millisecond):
 	}
 
-	// Queue should have dropped v0 and now start at v1
-	if len(m.queue) != 2 || m.queue[0].ID != "v1" || m.queue[1].ID != "v2" {
-		t.Fatalf("expected queue to advance to [v1, v2], got: %v", m.queue)
-	}
-	if m.queueCursor != 0 {
-		t.Fatalf("expected cursor to adjust to 0, got: %d", m.queueCursor)
+	// Queue is left untouched.
+	if len(m.queue) != 3 || m.queue[0].ID != "v0" || m.queue[1].ID != "v1" || m.queue[2].ID != "v2" {
+		t.Fatalf("queue must be left untouched, got: %v", m.queue)
 	}
 }
 

@@ -246,21 +246,17 @@ func TestMPVIPC(t *testing.T) {
 		}
 	}
 
-	// 5. Test playInMPV auto-enqueues into running MPV
-	enqueued, err := playInMPV(testURL)
-	if err != nil {
-		t.Fatalf("playInMPV failed: %v", err)
+	// 5. playNowInMPV replaces the running instance's playlist and plays the
+	// first URL immediately (loadfile without append).
+	if err := playNowInMPV(testURL); err != nil {
+		t.Fatalf("playNowInMPV failed: %v", err)
 	}
-	if !enqueued {
-		t.Fatal("playInMPV should return enqueued=true when mpv is running")
-	}
-
 	select {
 	case cmd := <-recv:
-		if len(cmd) != 3 || cmd[0] != "loadfile" || cmd[1] != testURL || cmd[2] != "append-play" {
-			t.Fatalf("unexpected mpv command received from playInMPV: %v", cmd)
+		if len(cmd) != 2 || cmd[0] != "loadfile" || cmd[1] != testURL {
+			t.Fatalf("unexpected mpv command received from playNowInMPV: %v", cmd)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for mpv command from playInMPV")
+		t.Fatal("timed out waiting for mpv command from playNowInMPV")
 	}
 }

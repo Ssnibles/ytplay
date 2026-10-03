@@ -24,9 +24,9 @@ TUI YouTube search & play built with [Bubble Tea](https://github.com/charmbracel
 - Full-width header and status bars: context, counts and the `● mpv active` indicator up top; contextual key hints and confirmations/errors at the bottom
 - Adaptive light/dark palette with a restrained blue/violet accent, so it stays legible on either terminal
 - Infinite paging: keep scrolling near the bottom to fetch more results
-- Seamless playback & auto-enqueue: `Enter` spawns mpv detached; while mpv is running, subsequent videos automatically enqueue into the active mpv session with visual feedback and an active indicator (`● mpv active`)
+- Playback: `Enter` plays the selected video immediately (replacing whatever mpv is doing); a new detached mpv is spawned if none is running, and the header shows `● mpv active`
 - Playback transport over mpv IPC: `space` pause/play, `n`/`b` skip forward/back, `+`/`-` volume, `m` mute
-- Play queue: `a` stages videos (or auto-enqueues into active mpv), `q` opens a queue page to reorder (`K`/`J`), remove (`x`), clear (`X`), or play/enqueue (`Enter` or `p`)
+- Play queue: `a` stages videos without touching mpv, `q` opens a queue page to reorder (`K`/`J`), remove (`x`), clear (`X`), or play (`Enter` from the selection, `p` for all)
 - Channel browsing: browse a channel's videos in a two-pane list with thumbnails and stats (`Enter` on a channel result, `C` or `Tab` + `Enter` on a video, `O` opens channel in browser)
 - Search history: past queries are persisted and recalled with `Ctrl+P` / `Ctrl+N` or `↑` / `↓`
 - `c` copies the selected video's URL (native clipboard, with an OSC52 terminal fallback over SSH), `o` opens the video directly in your browser, `O` opens the channel
@@ -53,10 +53,10 @@ ytplay <query> # Search directly
 | `j` / `k` / `↓` / `↑`                 | move selection                                    |
 | `Tab` / `Shift+Tab`                   | jump between list and channel preview             |
 | `PgUp` / `PgDn` / `j`/`k` near bottom | page & load more results                          |
-| `Enter`                               | play or auto-enqueue video (or browse channel)    |
+| `Enter`                               | play selected video now (or browse channel)       |
 | `C`                                   | view selected video's channel in ytplay           |
 | `O`                                   | open channel in browser                           |
-| `a`                                   | queue video (auto-enqueues into mpv if running)   |
+| `a`                                   | queue video (stages it; does not play)            |
 | `x`                                   | unqueue video if currently in queue               |
 | `q`                                   | open the queue view                               |
 | `space`                               | pause / resume mpv                                |
@@ -73,8 +73,8 @@ ytplay <query> # Search directly
 | ------------------------------------- | ------------------------------------------------- |
 | `j` / `k` / `↓` / `↑`                 | move selection                                    |
 | `PgUp` / `PgDn` / `j`/`k` near bottom | page & load more channel videos                   |
-| `Enter`                               | play or auto-enqueue selected video in mpv        |
-| `a`                                   | queue video (auto-enqueues into mpv if running)   |
+| `Enter`                               | play selected video now in mpv                    |
+| `a`                                   | queue video (stages it; does not play)            |
 | `x`                                   | unqueue video if currently in queue               |
 | `q`                                   | open the queue view                               |
 | `space`                               | pause / resume mpv                                |
@@ -95,8 +95,8 @@ ytplay <query> # Search directly
 | `K` / `J`             | move selected video up / down                          |
 | `x`                   | remove selected video from queue                       |
 | `X`                   | clear entire queue                                     |
-| `Enter`               | play/enqueue selected video and remove it from queue   |
-| `p`                   | play/enqueue all queued videos in mpv                  |
+| `Enter`               | play selected video and continue from it in mpv        |
+| `p`                   | play all queued videos from the top in mpv             |
 | `space`               | pause / resume mpv                                     |
 | `n` / `b`             | skip to next / previous video                          |
 | `+` / `-`             | volume up / down                                       |

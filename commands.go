@@ -495,27 +495,32 @@ func enqueueToMPV(urls ...string) error {
 	return nil
 }
 
-// playInMPV plays the given URLs. If an mpv instance is already running with an
-// active IPC socket, the videos are automatically enqueued into it and enqueued=true
-// is returned. Otherwise, a new detached mpv process is spawned and enqueued=false
-// is returned.
-func playInMPV(urls ...string) (bool, error) {
+// replaceMPVPlaylist makes urls the running mpv's playlist and starts playing
+// the first one immediately. Unlike enqueueToMPV (append), this is the
+// "play this now" action.
+func replaceMPVPlaylist(urls ...string) error {
 	if len(urls) == 0 {
-		return false, nil
+		return nil
 	}
-
-	if isMPVRunning() {
-		if err := enqueueToMPV(urls...); err == nil {
-			return true, nil
+	if err := sendMPVCommand("loadfile", urls[0]); err != nil {
+		return err
+	}
+	for _, u := range urls[1:] {
+		if err := sendMPVCommand("loadfile", u, "append"); err != nil {
+			return err
 		}
 	}
+	return nil
+}
 
+// spawnMPV launches a new detached mpv process playing urls.
+func spawnMPV(urls ...string) error {
 	sock := mpvSocketPath()
 	_ = os.Remove(sock)
 
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
-		return false, fmt.Errorf("mpv: %w", err)
+		return fmt.Errorf("mpv: %w", err)
 	}
 	defer devnull.Close()
 
@@ -529,7 +534,7 @@ func playInMPV(urls ...string) (bool, error) {
 	cmd.Stdout = devnull
 	cmd.Stderr = devnull
 	if err := cmd.Start(); err != nil {
-		return false, fmt.Errorf("mpv: %w", err)
+		return fmt.Errorf("mpv: %w", err)
 	}
 	// Reap the detached process in the background when it terminates so it doesn't linger as a zombie.
 	go func() {
@@ -540,7 +545,22 @@ func playInMPV(urls ...string) (bool, error) {
 		mpvCheckMu.Unlock()
 	}()
 	resetMPVRunningCache()
-	return false, nil
+	return nil
+}
+
+// playNowInMPV starts playing urls immediately. If mpv is already running its
+// playlist is replaced (so the first URL plays right away); otherwise a new
+// detached mpv process is spawned.
+func playNowInMPV(urls ...string) error {
+	if len(urls) == 0 {
+		return nil
+	}
+	if isMPVRunning() {
+		if err := replaceMPVPlaylist(urls...); err == nil {
+			return nil
+		}
+	}
+	return spawnMPV(urls...)
 }
 
 // mpvControlCmd runs one mpv IPC command off the UI goroutine and reports back.

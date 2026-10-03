@@ -116,18 +116,14 @@ func (m model) hintPairs() []hintPair {
 			{"o", "video"}, {"/", "search"}, {"Esc", "back"},
 		}
 	}
-	playVerb := "play"
-	if isMPVRunning() {
-		playVerb = "enqueue"
-	}
 	if m.state == queueState {
 		return []hintPair{
 			{"j/k", "move"}, {"K/J", "reorder"}, {"x", "remove"}, {"X", "clear"},
-			{"Enter", playVerb}, {"p", playVerb + " all"}, {"space", "pause"}, {"Esc", "back"},
+			{"Enter", "play"}, {"p", "play all"}, {"space", "pause"}, {"Esc", "back"},
 		}
 	}
 	return []hintPair{
-		{"Enter", playVerb}, {"a", "queue"}, {"q", "queue"}, {"space", "pause"},
+		{"Enter", "play"}, {"a", "queue"}, {"q", "queue"}, {"space", "pause"},
 		{"n/b", "skip"}, {"Tab", "details"}, {"c", "copy"}, {"/", "search"},
 	}
 }

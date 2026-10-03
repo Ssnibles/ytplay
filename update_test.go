@@ -850,7 +850,7 @@ func TestChannelAndQueuePaneFocus(t *testing.T) {
 	}
 }
 
-func TestAutoEnqueueIntoMPV(t *testing.T) {
+func TestEnterPlaysNowInMPV(t *testing.T) {
 	resetMPVRunningCache()
 	tmpDir := t.TempDir()
 	sock := filepath.Join(tmpDir, "test-mpv.sock")
@@ -872,24 +872,27 @@ func TestAutoEnqueueIntoMPV(t *testing.T) {
 	})
 	m = update(m, tea.KeyMsg{Type: tea.KeyEnter})
 	md := m.(model)
-	if !strings.Contains(md.status, "enqueued") {
-		t.Fatalf("expected status to show enqueued, got %q", md.status)
+	if !strings.Contains(md.status, "playing") {
+		t.Fatalf("enter should start playback, got status %q", md.status)
 	}
 	if !strings.Contains(md.status, "Great Song") {
 		t.Fatalf("expected status to mention title, got %q", md.status)
 	}
+	if len(md.queue) != 1 || md.queue[0].ID != "v1" {
+		t.Fatalf("the playing video should replace the queue, got %v", md.queue)
+	}
 
 	select {
 	case cmd := <-recv:
-		if len(cmd) != 3 || cmd[0] != "loadfile" || cmd[1] != "https://youtu.be/v1" {
-			t.Fatalf("unexpected mpv command: %v", cmd)
+		if len(cmd) != 2 || cmd[0] != "loadfile" || cmd[1] != "https://youtu.be/v1" {
+			t.Fatalf("enter should replace and play (loadfile without append), got %v", cmd)
 		}
 	default:
 		t.Fatal("expected mpv command to be sent")
 	}
 }
 
-func TestKeyAAutoEnqueuesWhenMPVRunning(t *testing.T) {
+func TestKeyAQueuesWithoutPlaying(t *testing.T) {
 	resetMPVRunningCache()
 	tmpDir := t.TempDir()
 	sock := filepath.Join(tmpDir, "test-mpv.sock")
@@ -911,17 +914,17 @@ func TestKeyAAutoEnqueuesWhenMPVRunning(t *testing.T) {
 	})
 	m = update(m, keyRunes("a"))
 	md := m.(model)
-	if !strings.Contains(md.status, "enqueued") {
-		t.Fatalf("pressing a while mpv is running should auto-enqueue into mpv, got %q", md.status)
+	if !strings.Contains(md.status, "queued") {
+		t.Fatalf("a should only stage the video, got status %q", md.status)
+	}
+	if len(md.queue) != 1 || md.queue[0].ID != "v1" {
+		t.Fatalf("a should add to the queue, got %v", md.queue)
 	}
 
 	select {
 	case cmd := <-recv:
-		if len(cmd) != 3 || cmd[0] != "loadfile" {
-			t.Fatalf("unexpected mpv command: %v", cmd)
-		}
+		t.Fatalf("a must not talk to mpv, but sent: %v", cmd)
 	default:
-		t.Fatal("expected mpv command to be sent on key a")
 	}
 }
 
@@ -1038,7 +1041,7 @@ func TestMPVActiveIndicatorInHeaderAndHints(t *testing.T) {
 		t.Fatalf("header should show mpv active indicator when mpv is running:\n%s", out)
 	}
 	hints := m.actionHints()
-	if !strings.Contains(hints, "Enter enqueue") {
-		t.Fatalf("hints should say 'Enter enqueue' when mpv is running, got %q", hints)
+	if !strings.Contains(hints, "Enter play") {
+		t.Fatalf("hints should say 'Enter play', got %q", hints)
 	}
 }

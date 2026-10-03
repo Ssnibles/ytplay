@@ -436,21 +436,15 @@ func (m model) handleResultsKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		if m.focusPane == previewPane || v.isChannel() {
 			return m.openChannelView(v)
 		}
-		enqueued, err := playInMPV(v.watchURL())
-		if err != nil {
+		if err := playNowInMPV(v.watchURL()); err != nil {
 			m.status = ""
 			m.errMsg = err.Error()
 			return m, nil
 		}
 		m.errMsg = ""
-		if enqueued {
-			m.queue = append(m.queue, v)
-			m.status = fmt.Sprintf("enqueued %q into mpv", v.Title)
-		} else {
-			m.queue = []video{v}
-			m.queueCursor = 0
-			m.status = fmt.Sprintf("playing %q in mpv", v.Title)
-		}
+		m.queue = []video{v}
+		m.queueCursor = 0
+		m.status = fmt.Sprintf("playing %q in mpv", v.Title)
 		var tickCmd tea.Cmd
 		m, tickCmd = m.startMPVTick()
 		return m, tickCmd
@@ -471,19 +465,6 @@ func (m model) handleResultsKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		case "a":
 			if len(m.filtered) > 0 {
 				v := m.filtered[m.cursor]
-				if isMPVRunning() {
-					if err := enqueueToMPV(v.watchURL()); err != nil {
-						m.status = ""
-						m.errMsg = err.Error()
-						return m, nil
-					}
-					m.queue = append(m.queue, v)
-					m.errMsg = ""
-					m.status = fmt.Sprintf("enqueued %q into mpv", v.Title)
-					var tickCmd tea.Cmd
-					m, tickCmd = m.startMPVTick()
-					return m, tickCmd
-				}
 				m.queue = append(m.queue, v)
 				m.errMsg = ""
 				m.status = fmt.Sprintf("queued · %d in queue", len(m.queue))
@@ -570,21 +551,15 @@ func (m model) handleChannelKey(msg tea.KeyMsg) (model, tea.Cmd) {
 			return m, nil
 		}
 		v := m.channelVideos[m.channelCursor]
-		enqueued, err := playInMPV(v.watchURL())
-		if err != nil {
+		if err := playNowInMPV(v.watchURL()); err != nil {
 			m.status = ""
 			m.errMsg = err.Error()
 			return m, nil
 		}
 		m.errMsg = ""
-		if enqueued {
-			m.queue = append(m.queue, v)
-			m.status = fmt.Sprintf("enqueued %q into mpv", v.Title)
-		} else {
-			m.queue = []video{v}
-			m.queueCursor = 0
-			m.status = fmt.Sprintf("playing %q in mpv", v.Title)
-		}
+		m.queue = []video{v}
+		m.queueCursor = 0
+		m.status = fmt.Sprintf("playing %q in mpv", v.Title)
 		var tickCmd tea.Cmd
 		m, tickCmd = m.startMPVTick()
 		return m, tickCmd
@@ -605,19 +580,6 @@ func (m model) handleChannelKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		case "a":
 			if len(m.channelVideos) > 0 {
 				v := m.channelVideos[m.channelCursor]
-				if isMPVRunning() {
-					if err := enqueueToMPV(v.watchURL()); err != nil {
-						m.status = ""
-						m.errMsg = err.Error()
-						return m, nil
-					}
-					m.queue = append(m.queue, v)
-					m.errMsg = ""
-					m.status = fmt.Sprintf("enqueued %q into mpv", v.Title)
-					var tickCmd tea.Cmd
-					m, tickCmd = m.startMPVTick()
-					return m, tickCmd
-				}
 				m.queue = append(m.queue, v)
 				m.errMsg = ""
 				m.status = fmt.Sprintf("queued · %d in queue", len(m.queue))
