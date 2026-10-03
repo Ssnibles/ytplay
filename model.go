@@ -28,18 +28,20 @@ const (
 )
 
 type navPage struct {
-	state          state
-	query          string
-	filtered       []video
-	cursor         int
-	fetched        int
-	focusPane      pane
-	descScroll     int
-	channelTitle   string
-	channelURL     string
-	channelVideos  []video
-	channelCursor  int
-	channelFetched int
+	state            state
+	query            string
+	filtered         []video
+	cursor           int
+	fetched          int
+	focusPane        pane
+	descScroll       int
+	channelTitle     string
+	channelURL       string
+	channelVideos    []video
+	channelCursor    int
+	channelFetched   int
+	resultsExhausted bool
+	channelExhausted bool
 }
 
 type model struct {
@@ -58,6 +60,7 @@ type model struct {
 	detailBusy          map[string]bool
 	fetched             int      // how many results have been asked for so far
 	fetchingMore        bool     // a follow-up page is in flight
+	resultsExhausted    bool     // search returned everything it has; stop paging
 	history             []string // past queries, oldest first
 	histIdx             int      // -1 = editing fresh text, else index into history
 	pending             string   // typed text saved when entering history navigation
@@ -69,6 +72,7 @@ type model struct {
 	channelCursor       int      // selected row on channel page
 	channelFetched      int      // how many channel results asked for so far
 	channelFetchingMore bool     // a channel follow-up page is in flight
+	channelExhausted    bool     // channel returned everything it has; stop paging
 	channelLoading      bool     // initial channel fetch in flight
 	focusPane           pane     // listPane vs previewPane focus
 	descScroll          int      // scroll offset in preview description lines
@@ -80,18 +84,20 @@ type model struct {
 
 func (m model) currentNavPage() navPage {
 	return navPage{
-		state:          m.state,
-		query:          m.query,
-		filtered:       m.filtered,
-		cursor:         m.cursor,
-		fetched:        m.fetched,
-		focusPane:      m.focusPane,
-		descScroll:     m.descScroll,
-		channelTitle:   m.channelTitle,
-		channelURL:     m.channelURL,
-		channelVideos:  m.channelVideos,
-		channelCursor:  m.channelCursor,
-		channelFetched: m.channelFetched,
+		state:            m.state,
+		query:            m.query,
+		filtered:         m.filtered,
+		cursor:           m.cursor,
+		fetched:          m.fetched,
+		focusPane:        m.focusPane,
+		descScroll:       m.descScroll,
+		channelTitle:     m.channelTitle,
+		channelURL:       m.channelURL,
+		channelVideos:    m.channelVideos,
+		channelCursor:    m.channelCursor,
+		channelFetched:   m.channelFetched,
+		resultsExhausted: m.resultsExhausted,
+		channelExhausted: m.channelExhausted,
 	}
 }
 
@@ -119,6 +125,8 @@ func (m model) popNav() (model, bool) {
 	m.channelVideos = p.channelVideos
 	m.channelCursor = p.channelCursor
 	m.channelFetched = p.channelFetched
+	m.resultsExhausted = p.resultsExhausted
+	m.channelExhausted = p.channelExhausted
 	m.channelLoading = false
 	m.channelFetchingMore = false
 	m.fetchingMore = false

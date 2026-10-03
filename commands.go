@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/atotto/clipboard"
+	osc52 "github.com/aymanbagabas/go-osc52/v2"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -47,6 +48,12 @@ type detailMsg struct {
 type copyMsg struct {
 	url string
 	err error
+	osc bool // copied with an OSC52 terminal sequence, not a native clipboard
+}
+
+type mpvControlMsg struct {
+	label string
+	err   error
 }
 
 type openMsg struct {
@@ -230,14 +237,33 @@ func thumbCmd(v video, cols, rows int, proto imgProto) tea.Cmd {
 }
 
 // copyURLCmd writes url to the system clipboard (yank) and reports back so the
-// TUI can confirm without blocking on the clipboard service.
+// TUI can confirm without blocking on the clipboard service. When no native
+// clipboard tool is available (common over SSH or on bare Wayland) it falls
+// back to the OSC52 escape sequence, which the terminal itself handles.
 func copyURLCmd(url string) tea.Cmd {
 	return func() tea.Msg {
-		if err := clipboard.WriteAll(url); err != nil {
-			return copyMsg{url, err}
+		if err := clipboard.WriteAll(url); err == nil {
+			return copyMsg{url: url}
+		} else if err := writeOSC52(url); err != nil {
+			return copyMsg{url: url, err: err}
 		}
-		return copyMsg{url, nil}
+		return copyMsg{url: url, osc: true}
 	}
+}
+
+// writeOSC52 emits an OSC52 clipboard-set sequence on stdout. The sequence is a
+// terminal control message, so it is safe to write even while the TUI owns the
+// screen; tmux/screen need their own wrapping to pass it through.
+func writeOSC52(s string) error {
+	seq := osc52.New(s)
+	switch {
+	case os.Getenv("TMUX") != "":
+		seq = seq.Tmux()
+	case os.Getenv("STY") != "":
+		seq = seq.Screen()
+	}
+	_, err := fmt.Fprint(os.Stdout, seq)
+	return err
 }
 
 // channelVideosURL formats a channel URL, handle, or ID into its /videos endpoint.
@@ -514,6 +540,21 @@ func playInMPV(urls ...string) (bool, error) {
 	}()
 	resetMPVRunningCache()
 	return false, nil
+}
+
+// mpvControlCmd runs one mpv IPC command off the UI goroutine and reports back.
+// Unlike sendMPVCommand it treats "mpv is not running" as an error, so pressing
+// a transport key with no player gives useful feedback.
+func mpvControlCmd(label string, args ...interface{}) tea.Cmd {
+	return func() tea.Msg {
+		if !isMPVRunning() {
+			return mpvControlMsg{label: label, err: fmt.Errorf("mpv is not running")}
+		}
+		if err := sendMPVCommand(args...); err != nil {
+			return mpvControlMsg{label: label, err: err}
+		}
+		return mpvControlMsg{label: label}
+	}
 }
 
 // sendMPVCommand sends a command to mpv over IPC and waits for confirmation.

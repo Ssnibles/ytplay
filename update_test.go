@@ -320,7 +320,7 @@ func TestDetailFetchAndCache(t *testing.T) {
 	if _, ok := md.details["a1"]; !ok {
 		t.Fatal("details should be cached after delivery")
 	}
-	if cmd := md.loadDetailAt(0); cmd != nil {
+	if cmd := md.loadDetailFor(md.filtered[0]); cmd != nil {
 		t.Fatal("cached details should not be refetched")
 	}
 }

@@ -23,7 +23,11 @@
 
           postInstall = ''
             wrapProgram $out/bin/ytplay \
-              --prefix PATH : ${nixpkgs.lib.makeBinPath [ pkgs.yt-dlp ]}
+              --prefix PATH : ${nixpkgs.lib.makeBinPath [
+                pkgs.yt-dlp
+                pkgs.mpv
+                pkgs.xdg-utils
+              ]}
           '';
 
           meta = {
