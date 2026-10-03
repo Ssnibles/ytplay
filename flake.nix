@@ -22,12 +22,12 @@
           nativeBuildInputs = [ pkgs.makeWrapper ];
 
           postInstall = ''
+            # Only yt-dlp is provided by the wrapper. mpv is deliberately left to
+            # the user's PATH so a custom mpv (e.g. mpv-with-scripts / ModernZ,
+            # or a system mpv.conf with osc=no plus a scripted OSC) is not
+            # shadowed by a plain nixpkgs mpv.
             wrapProgram $out/bin/ytplay \
-              --prefix PATH : ${nixpkgs.lib.makeBinPath [
-                pkgs.yt-dlp
-                pkgs.mpv
-                pkgs.xdg-utils
-              ]}
+              --prefix PATH : ${nixpkgs.lib.makeBinPath [ pkgs.yt-dlp ]}
           '';
 
           meta = {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -510,6 +511,9 @@ func replaceMPVPlaylist(urls ...string) error {
 			return err
 		}
 	}
+	// mpv's pause property survives loadfile, so a "play now" must clear it or
+	// a previously paused player shows a frozen first frame.
+	_ = sendMPVCommand("set", "pause", "no")
 	return nil
 }
 
@@ -559,6 +563,10 @@ func playNowInMPV(urls ...string) error {
 		if err := replaceMPVPlaylist(urls...); err == nil {
 			return nil
 		}
+		// The running instance refused the command. Ask it to quit so it can't
+		// linger as a second, uncontrolled player, then start fresh.
+		_ = sendMPVCommand("quit")
+		resetMPVRunningCache()
 	}
 	return spawnMPV(urls...)
 }
@@ -578,10 +586,15 @@ func mpvControlCmd(label string, args ...interface{}) tea.Cmd {
 	}
 }
 
+// errMPVNotRunning is returned by sendMPVCommand when there is no live mpv IPC
+// socket. Callers that want a silent no-op can ignore it; callers that depend on
+// the command being delivered (playNowInMPV) must not.
+var errMPVNotRunning = errors.New("mpv is not running")
+
 // sendMPVCommand sends a command to mpv over IPC and waits for confirmation.
 func sendMPVCommand(args ...interface{}) error {
 	if !isMPVRunning() {
-		return nil
+		return errMPVNotRunning
 	}
 	sock := mpvSocketPath()
 	conn, err := net.DialTimeout("unix", sock, 150*time.Millisecond)
