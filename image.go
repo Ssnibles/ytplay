@@ -107,6 +107,7 @@ func renderThumb(v video, cols, rows int, proto imgProto) (string, error) {
 //     positions for the image, but no characters written into its cells (spaces
 //     would overwrite sixel pixels).
 //   - ansi: half-block pixel art, returned as-is.
+//
 // tightThumbDims calculates the exact (cols, rows) in terminal cells that
 // img will occupy when scaled to fit within maxCols x maxRows while preserving
 // aspect ratio, avoiding empty letterboxing rows or columns. Terminal cells

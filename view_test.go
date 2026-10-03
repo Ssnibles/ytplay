@@ -88,7 +88,7 @@ func TestQueueViewUsesSharedPanes(t *testing.T) {
 		queueCursor: 0,
 	}
 	out := m.viewQueue()
-	for _, want := range []string{"Queued Vid", "45k views", "Jan 15, 2024", "Queue · 1 videos"} {
+	for _, want := range []string{"Queued Vid", "45k views", "Jan 15, 2024", "Queue · 1 video"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("queue view missing %q:\n%s", want, out)
 		}
@@ -282,10 +282,9 @@ func TestSmallTerminalCanScrollFullDescription(t *testing.T) {
 		}},
 	}
 
-	// Usable height inside the box is 14 - 4 - 2 = 8 lines
-	h := l.midH - 2
-	if h != 8 {
-		t.Fatalf("expected usable box height 8, got %d", h)
+	// Usable height is the full content area: the panes are borderless now.
+	if l.midH != 12 {
+		t.Fatalf("expected content height 12, got %d", l.midH)
 	}
 
 	// At scroll = 0, title & channel take the top rows
@@ -307,3 +306,44 @@ func TestSmallTerminalCanScrollFullDescription(t *testing.T) {
 	}
 }
 
+// The frame must fill the window exactly and never exceed it: a line wider than
+// the terminal wraps, and a frame taller than the terminal scrolls, either of
+// which drags the cell-anchored thumbnail out of place.
+func TestFrameFillsWindowExactly(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(oldProfile)
+
+	sizes := [][2]int{{120, 40}, {80, 24}, {60, 18}, {40, 12}}
+	for _, s := range sizes {
+		for _, st := range []state{resultsState, channelState, queueState} {
+			m := model{
+				state: st, width: s[0], height: s[1], proto: protoAnsi,
+				thumbs: map[string]string{}, thumbBusy: map[string]bool{},
+				details: map[string]videoDetail{}, detailBusy: map[string]bool{},
+				filtered:      []video{{ID: "v1", Title: "A video", Channel: "C"}},
+				channelVideos: []video{{ID: "c1", Title: "A video", Channel: "C"}},
+				queue:         []video{{ID: "q1", Title: "A video", Channel: "C"}},
+				query:         "some query",
+			}
+			var out string
+			switch st {
+			case resultsState:
+				out = m.viewResults()
+			case channelState:
+				out = m.viewChannel()
+			case queueState:
+				out = m.viewQueue()
+			}
+			lines := strings.Split(out, "\n")
+			if len(lines) != s[1] {
+				t.Fatalf("%dx%d state %d: got %d lines, want %d", s[0], s[1], st, len(lines), s[1])
+			}
+			for i, ln := range lines {
+				if w := lipgloss.Width(ln); w > s[0] {
+					t.Fatalf("%dx%d state %d line %d: width %d > %d: %q", s[0], s[1], st, i, w, s[0], ln)
+				}
+			}
+		}
+	}
+}

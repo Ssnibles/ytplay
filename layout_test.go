@@ -8,9 +8,9 @@ func TestLayoutGeometry(t *testing.T) {
 		left, right, mid, avail, cols, rows int
 		ok                                  bool
 	}{
-		{120, 40, 54, 65, 36, 34, 61, 17, true},
-		{80, 24, 36, 43, 20, 18, 39, 11, true},
-		{40, 12, 18, 21, 8, 6, 0, 0, false},
+		{120, 40, 50, 67, 38, 38, 67, 18, true},
+		{80, 24, 33, 44, 22, 22, 44, 12, true},
+		{40, 12, 17, 20, 10, 10, 0, 0, false},
 		{0, 0, 0, 0, 0, 0, 0, 0, false},
 	}
 	for _, c := range cases {

@@ -6,9 +6,10 @@ const (
 	// pageStep is how many rows PgUp/PgDn move the selection.
 	pageStep = 10
 
-	// detailLines is how many rows the preview pane reserves under the thumbnail
-	// for channel/video stats (subscribers, channel views, views · posted).
-	detailLines = 3
+	// previewChrome is how many lines the preview reserves for things other
+	// than the image: title, metadata, gaps, stats and a line of slack. The
+	// thumbnail is sized so all of that still fits under it.
+	previewChrome = 7
 
 	// detailLookahead is how many videos past the selection get their stats
 	// prefetched. Stats are expensive (a full per-video extract), so fetching the
@@ -19,53 +20,76 @@ const (
 	maxThumbs  = 64
 )
 
-// layout holds the results-pane geometry, derived from the window size once
-// per View so the pane arithmetic lives in one place.
+// layout holds the page geometry, derived from the window size once per View so
+// the pane arithmetic lives in one place.
+//
+// The frame is three rows: a one-line header bar, the content area, and a
+// one-line status bar. The content area is a list column, a gap, a vertical
+// rule, a gap, and the preview column. Every block is pinned to the exact
+// content height so the frame fills the window and never scrolls: a frame that
+// scrolls would drag the cell-anchored thumbnail out of place.
 type layout struct {
-	leftW   int  // list pane width (columns)
-	rightW  int  // preview pane width (columns)
-	midH    int  // pinned height of both pane boxes (lines)
-	avail   int  // usable list rows inside the list box (borders excluded)
+	leftW   int  // list column width (columns)
+	rightW  int  // preview column width (columns)
+	midH    int  // pinned height of the content area (lines)
+	avail   int  // usable list rows
 	cols    int  // thumbnail cells wide (0 = not renderable)
 	rows    int  // thumbnail cells tall (0 = not renderable)
 	thumbOK bool // >0 cells fit the preview body
 }
 
-// computeLayout derives pane geometry from the window size. Both panes are
-// pinned to midH = winH-4 lines so header(1) + input(1) + panes + a two-line
-// text/footer zone fill the window exactly, top to bottom: a frame that scrolls
-// would desync the cell-anchored image. Widths are content widths (lipgloss
-// adds the two border columns), so the outer boxes sum to exactly the window
-// width. The preview body holds title + meta + spacer (three lines), the image,
-// and detailLines of channel/video stats, so the image rows are capped at
-// midH-6-detailLines.
+// computeLayout derives the page geometry from the window size. leftW is a
+// bounded 42% sidebar; the preview takes the rest minus the two one-column gaps
+// and the vertical rule.
 func computeLayout(winW, winH int) layout {
 	l := layout{}
 	if winW <= 0 || winH <= 0 {
 		return l
 	}
-	l.leftW = winW * 45 / 100
-	l.rightW = winW - l.leftW - 1
-	l.midH = winH - 4
-	l.avail = l.midH - 2 // list rows: pane lines minus its two borders
+	l.midH = winH - 2
+	if l.midH < 1 {
+		l.midH = 1
+	}
+
+	l.leftW = winW * 42 / 100
+	if l.leftW > 64 {
+		l.leftW = 64
+	}
+	if l.leftW < 24 {
+		l.leftW = 24
+	}
+	l.rightW = winW - l.leftW - 3 // list + " " + "│" + " "
+	if l.rightW < 20 {
+		l.rightW = 20
+		l.leftW = winW - l.rightW - 3
+	}
+	if l.leftW < 12 {
+		l.leftW = 12
+		l.rightW = winW - l.leftW - 3
+	}
+	if l.rightW < 0 {
+		l.rightW = 0
+	}
+	if l.leftW < 0 {
+		l.leftW = 0
+	}
+
+	l.avail = l.midH
 	l.cols, l.rows, l.thumbOK = thumbDims(l.rightW, l.midH)
 	return l
 }
 
-// thumbDims returns the cell size for a thumbnail that fits the preview pane
-// body: availCols is the pane width minus its borders and padding; availRows
-// is the pinned midH body minus the three text lines (title, meta, spacer),
-// the detailLines reserved beneath the image, and a line of slack. A terminal
-// cell is roughly 1:2 (w:h), so a 16:9 area occupies cols/rows = (16/9)*(1/2)
-// = 32/9 cells.
+// thumbDims returns the cell size for a thumbnail that fits the preview body.
+// The image takes the width it can while keeping a 16:9 aspect (a terminal cell
+// is roughly 1:2, so 16:9 occupies cols/rows = 32/9).
 func thumbDims(rightW, midH int) (cols, rows int, ok bool) {
-	availCols := rightW - 4 // 2 borders + 2 padding
-	availRows := midH - 6 - detailLines
+	availCols := rightW
+	availRows := midH - previewChrome
 	if availRows < 4 || availCols < 16 {
 		return 0, 0, false
 	}
 	rows = availRows
-	cols = rows * 32 / 9 // 16:9 in cells (1:2 cell aspect)
+	cols = rows * 32 / 9
 	if cols > availCols {
 		cols = availCols
 		rows = cols * 9 / 32

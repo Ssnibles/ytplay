@@ -2,92 +2,83 @@ package main
 
 import "github.com/charmbracelet/lipgloss"
 
-// Palette colors (matching "vague" theme).
+// ytplay's palette. Colours are adaptive so the UI keeps its contrast on both
+// dark and light terminals. Blue and violet carry identity and focus, green/red/
+// yellow are reserved for state (playing, errors, warnings).
 var (
-	accent  = lipgloss.Color("6e94b2")
-	red     = lipgloss.Color("d8647e")
-	fg      = lipgloss.Color("cdcdcd")
-	fgMid   = lipgloss.Color("878787")
-	fgDim   = lipgloss.Color("606079")
-	grey    = lipgloss.Color("8a8a8a")
-	bgRound = lipgloss.Color("252530")
+	bgBar  = lipgloss.AdaptiveColor{Light: "#e2e7f3", Dark: "#1b1e2b"}
+	bgSel  = lipgloss.AdaptiveColor{Light: "#ccd6f2", Dark: "#2b3149"}
+	bgChip = lipgloss.AdaptiveColor{Light: "#dbe1f0", Dark: "#252a3a"}
+
+	accent  = lipgloss.AdaptiveColor{Light: "#3b5b9e", Dark: "#7aa2f7"}
+	accent2 = lipgloss.AdaptiveColor{Light: "#6f42a8", Dark: "#bb9af7"}
+	green   = lipgloss.AdaptiveColor{Light: "#2f7d4f", Dark: "#9ece6a"}
+	red     = lipgloss.AdaptiveColor{Light: "#b3404a", Dark: "#f7768e"}
+
+	fg     = lipgloss.AdaptiveColor{Light: "#20242f", Dark: "#c8d3f5"}
+	fgMid  = lipgloss.AdaptiveColor{Light: "#4a5169", Dark: "#9aa5ce"}
+	fgDim  = lipgloss.AdaptiveColor{Light: "#7b8299", Dark: "#565f89"}
+	border = lipgloss.AdaptiveColor{Light: "#c3cade", Dark: "#343b58"}
 )
 
-// Shared lipgloss styles, initialized once at startup to avoid
-// recreating styles on every render frame.
+// Text styles.
 var (
-	titleStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("000000")).
-			Background(accent).
-			Padding(0, 1).
-			Bold(true)
+	midStyle   = lipgloss.NewStyle().Foreground(fgMid)
+	dimStyle   = lipgloss.NewStyle().Foreground(fgDim)
+	errorStyle = lipgloss.NewStyle().Foreground(red).Bold(true)
+	sepStyle   = lipgloss.NewStyle().Foreground(border)
+)
 
-	promptBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(bgRound).
-			Padding(1, 2).
-			Width(46)
+// Full-width chrome bars (header + status line). Segment styles are given the
+// bar background at render time by renderBar so the bar reads as one strip.
+var (
+	barBgStyle = lipgloss.NewStyle().Background(bgBar)
 
-	promptTitleStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(accent)
+	barBrandStyle   = lipgloss.NewStyle().Bold(true).Foreground(accent)
+	barSepStyle     = lipgloss.NewStyle().Foreground(fgDim)
+	barCtxStyle     = lipgloss.NewStyle().Foreground(fg)
+	barStateStyle   = lipgloss.NewStyle().Foreground(fgMid)
+	barAccentStyle  = lipgloss.NewStyle().Foreground(accent2)
+	barMpvStyle     = lipgloss.NewStyle().Bold(true).Foreground(green)
+	barErrorStyle   = lipgloss.NewStyle().Bold(true).Foreground(red)
+	barStatusStyle  = lipgloss.NewStyle().Foreground(green)
+	barHintStyle    = lipgloss.NewStyle().Foreground(fgDim)
+	barHintKeyStyle = lipgloss.NewStyle().Bold(true).Foreground(fgMid)
+)
 
-	errorStyle = lipgloss.NewStyle().Foreground(red)
+// Prompt / searching screens.
+var (
+	wordmarkStyle    = lipgloss.NewStyle().Bold(true).Foreground(accent)
+	promptBoxStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(accent).Padding(0, 2)
+	promptHintStyle  = lipgloss.NewStyle().Foreground(fgDim)
+	promptKeyStyle   = lipgloss.NewStyle().Bold(true).Foreground(fgMid)
+	searchQueryStyle = lipgloss.NewStyle().Bold(true).Foreground(fg)
+	emptyTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(fgMid)
+)
 
-	statusStyle = lipgloss.NewStyle().
-			Padding(0, 1).
-			Foreground(accent)
+// List rows.
+var (
+	rowSelTitle     = lipgloss.NewStyle().Foreground(fg).Bold(true).Background(bgSel)
+	rowSelTitleDim  = lipgloss.NewStyle().Foreground(fgMid).Background(bgSel)
+	rowSelMeta      = lipgloss.NewStyle().Foreground(fgMid).Background(bgSel)
+	rowSelMarker    = lipgloss.NewStyle().Bold(true).Foreground(accent).Background(bgSel)
+	rowSelMarkerDim = lipgloss.NewStyle().Foreground(fgDim).Background(bgSel)
+	rowSelBg        = lipgloss.NewStyle().Background(bgSel)
 
-	accentStyle = lipgloss.NewStyle().Foreground(accent)
+	rowTitle = lipgloss.NewStyle().Foreground(fgMid)
+	rowMeta  = lipgloss.NewStyle().Foreground(fgDim)
 
-	dimStyle = lipgloss.NewStyle().Foreground(fgDim)
+	rowMarkerPlaying = lipgloss.NewStyle().Bold(true).Foreground(green)
+	rowMarkerQueued  = lipgloss.NewStyle().Foreground(accent2)
+)
 
-	barStyle = lipgloss.NewStyle().
-			Padding(0, 1).
-			Foreground(fgDim)
-
-	greyHintStyle = lipgloss.NewStyle().Foreground(grey)
-
-	footerHintStyle = lipgloss.NewStyle().
-			Padding(0, 1).
-			Foreground(grey)
-
-	emptyStyle = lipgloss.NewStyle().Foreground(fgMid)
-
-	headerStyle = lipgloss.NewStyle().Padding(0, 1)
-
-	searchingPrefixStyle = lipgloss.NewStyle().Foreground(fg)
-	searchingQueryStyle  = lipgloss.NewStyle().Bold(true).Foreground(fg)
-
-	mpvLiveStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("7ea87f")).
-			Bold(true)
-
-	barPrefixStyle = lipgloss.NewStyle().
-			Foreground(fgMid)
-
-	barValueStyle = lipgloss.NewStyle().
-			Foreground(accent).
-			Bold(true)
-
-	previewTitleStyle         = lipgloss.NewStyle().Bold(true).Foreground(accent)
-	previewChannelStyle       = lipgloss.NewStyle().Foreground(fgMid)
-	previewChannelActiveStyle = lipgloss.NewStyle().
-					Foreground(lipgloss.Color("000000")).
-					Background(accent).
-					Bold(true).
-					Padding(0, 1)
-
-	listActiveRowStyle = lipgloss.NewStyle().Foreground(accent).Bold(true)
-	listRowStyle       = lipgloss.NewStyle().Foreground(fg)
-
-	paneBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(bgRound).
-			Padding(0, 1)
-
-	paneBoxActiveStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(accent).
-			Padding(0, 1)
+// Preview pane.
+var (
+	previewTitle     = lipgloss.NewStyle().Bold(true).Foreground(fg)
+	previewTitleDim  = lipgloss.NewStyle().Bold(true).Foreground(fgMid)
+	previewMetaBar   = lipgloss.NewStyle().Foreground(accent).Bold(true)
+	previewMetaBarD  = lipgloss.NewStyle().Foreground(border)
+	previewMeta      = lipgloss.NewStyle().Foreground(fgMid)
+	previewMetaDim   = lipgloss.NewStyle().Foreground(fgDim)
+	previewHintStyle = lipgloss.NewStyle().Foreground(fgDim)
 )

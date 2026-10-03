@@ -262,4 +262,3 @@ func (m model) startMPVTick() (model, tea.Cmd) {
 	m.mpvTicking = true
 	return m, mpvTickCmd()
 }
-

@@ -700,7 +700,11 @@ func TestCapitalCOpensChannel(t *testing.T) {
 }
 
 func TestFocusPaneNavigationAndDescriptionScrolling(t *testing.T) {
-	desc := "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9\nLine 10"
+	var descLines []string
+	for i := 1; i <= 40; i++ {
+		descLines = append(descLines, fmt.Sprintf("Line %d", i))
+	}
+	desc := strings.Join(descLines, "\n")
 	m := tea.Model(initialModel(nil))
 	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 20})
 	m = update(m, searchMsg{
@@ -1038,4 +1042,3 @@ func TestMPVActiveIndicatorInHeaderAndHints(t *testing.T) {
 		t.Fatalf("hints should say 'Enter enqueue' when mpv is running, got %q", hints)
 	}
 }
-

@@ -327,4 +327,3 @@ func TestPlaylistAndChannelDetection(t *testing.T) {
 func fptr(f float64) *float64 {
 	return &f
 }
-
