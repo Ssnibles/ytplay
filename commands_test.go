@@ -98,10 +98,12 @@ func TestPrioritizeChannels(t *testing.T) {
 		t.Fatalf("slice without channels modified: %v", got)
 	}
 
-	// 4. Merge results pulls channel from extra to the very front
+	// 4. Merge preserves base order and appends new items; it must not
+	// re-prioritise channels on a follow-up page (that would move rows out
+	// from under the reader). Prioritisation happens once, on the first page.
 	merged := mergeResults([]video{v1, v2}, []video{c1})
-	if len(merged) != 3 || merged[0].ID != "UC111" {
-		t.Fatalf("merge did not prioritize channel: %v", merged)
+	if len(merged) != 3 || merged[0].ID != "v1" || merged[2].ID != "UC111" {
+		t.Fatalf("merge should preserve base order and append extras: %v", merged)
 	}
 
 	// 5. Playlists (even with IEKey: YoutubeTab) are not prioritized as channels

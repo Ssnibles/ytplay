@@ -676,12 +676,17 @@ func (m model) handleChannelMsg(msg channelMsg) (model, tea.Cmd) {
 		m.channelTitle = msg.channelTitle
 	}
 	if msg.more {
+		before := len(m.channelVideos)
 		m.channelVideos = mergeResults(m.channelVideos, msg.videos)
 		m.channelFetched = msg.limit
+		if len(m.channelVideos) == before || len(msg.videos) < msg.limit {
+			m.channelExhausted = true
+		}
 	} else {
 		m.channelVideos = msg.videos
 		m.channelFetched = msg.limit
 		m.channelCursor = 0
+		m.channelExhausted = len(msg.videos) < msg.limit
 	}
 	m.errMsg = ""
 	m.status = ""
@@ -701,6 +706,7 @@ func (m model) handleSearchMsg(msg searchMsg) (model, tea.Cmd) {
 		if !msg.more {
 			m.filtered = nil
 			m.state = resultsState
+			m.resultsExhausted = false
 		}
 		return m, nil
 	}
@@ -711,6 +717,7 @@ func (m model) handleSearchMsg(msg searchMsg) (model, tea.Cmd) {
 		if m.cursor >= 0 && m.cursor < len(m.filtered) {
 			selectedID = m.filtered[m.cursor].ID
 		}
+		before := len(m.filtered)
 		m.filtered = mergeResults(m.filtered, msg.videos)
 		if selectedID != "" {
 			for i, v := range m.filtered {
@@ -720,10 +727,16 @@ func (m model) handleSearchMsg(msg searchMsg) (model, tea.Cmd) {
 				}
 			}
 		}
+		// The page produced no new rows, or the refetch already held fewer than
+		// the requested limit: there is nothing deeper to page into.
+		if len(m.filtered) == before || len(msg.videos) < msg.limit {
+			m.resultsExhausted = true
+		}
 	} else {
 		m.filtered = prioritizeChannels(msg.videos)
 		m.state = resultsState
 		m.cursor = 0
+		m.resultsExhausted = len(msg.videos) < msg.limit
 	}
 	m.fetched = msg.limit
 	return m, m.loadSelection()
@@ -888,16 +901,13 @@ func (m model) loadDetailFor(v video) tea.Cmd {
 }
 
 // shouldLoadMore reports whether the next results page should be fetched: the
-// selection is within pageStep of the bottom of what has been fetched, and the
-// previous page returned as many as asked (otherwise we've hit the end).
+// selection is within pageStep of the bottom of what has been fetched and the
+// search has not already reported that it has nothing deeper.
 func (m model) shouldLoadMore() bool {
-	if m.state != resultsState || m.fetchingMore || len(m.filtered) == 0 {
+	if m.state != resultsState || m.fetchingMore || m.resultsExhausted || len(m.filtered) == 0 {
 		return false
 	}
-	if m.cursor < len(m.filtered)-pageStep {
-		return false
-	}
-	return m.fetched <= len(m.filtered)
+	return m.cursor >= len(m.filtered)-pageStep
 }
 
 func (m model) selectedDetail(v video) videoDetail {

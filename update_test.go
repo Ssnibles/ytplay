@@ -244,11 +244,11 @@ func TestShouldLoadMore(t *testing.T) {
 	}
 
 	m.fetchingMore = false
-	m.fetched = 30 // Asked for 30 but only 25 came back: end of results.
+	m.resultsExhausted = true // the search reported it has nothing deeper
 	if m.shouldLoadMore() {
-		t.Fatal("end of results should not trigger")
+		t.Fatal("an exhausted search should not trigger")
 	}
-	m.fetched = searchResults
+	m.resultsExhausted = false
 
 	m.state = promptState
 	if m.shouldLoadMore() {

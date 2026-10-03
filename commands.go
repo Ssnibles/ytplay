@@ -92,8 +92,9 @@ func prioritizeChannels(videos []video) []video {
 }
 
 // searchCmd fetches results via yt-dlp. It queries YouTube search results
-// (falling back to ytsearch syntax) up to limit entries, and ensures that any
-// channel found in the results is prioritized at the top.
+// (falling back to ytsearch syntax) up to limit entries. Ordering/channel
+// prioritisation is left to the caller so follow-up pages don't reshuffle the
+// list the user is reading.
 func searchCmd(query string, limit int, more bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -136,7 +137,6 @@ func searchCmd(query string, limit int, more bool) tea.Cmd {
 			seen[v.ID] = true
 			videos = append(videos, v)
 		}
-		videos = prioritizeChannels(videos)
 		if len(videos) == 0 {
 			// a follow-up page hitting the end comes back empty — that's not
 			// an error, it just means there is nothing more to load.
@@ -150,11 +150,12 @@ func searchCmd(query string, limit int, more bool) tea.Cmd {
 }
 
 // mergeResults appends the videos in extra that aren't already in base,
-// keeping base's order (and YouTube's order within extra), and always
-// prioritizing any channels at the top.
+// keeping base's order (and YouTube's order within extra). It deliberately does
+// not re-prioritise channels: doing that on every page would move rows out from
+// under the reader.
 func mergeResults(base, extra []video) []video {
 	if len(base) == 0 {
-		return prioritizeChannels(extra)
+		return extra
 	}
 	seen := make(map[string]bool, len(base)+len(extra))
 	for _, v := range base {
@@ -168,7 +169,7 @@ func mergeResults(base, extra []video) []video {
 			merged = append(merged, v)
 		}
 	}
-	return prioritizeChannels(merged)
+	return merged
 }
 
 // detailCmd extracts channel/video stats for one video. A full (non-flat)
