@@ -10,18 +10,17 @@ import (
 )
 
 func TestMPVTransportKeys(t *testing.T) {
-	resetMPVRunningCache()
+	mpv.reset()
 	tmpDir := t.TempDir()
 	sock := filepath.Join(tmpDir, "test-mpv.sock")
-	customMPVSocket = sock
+	useTestSocket(t, sock)
 	defer func() {
-		customMPVSocket = isolatedTestSocket
-		resetMPVRunningCache()
+		mpv.reset()
 	}()
 
 	recv, cleanup := startMockMPVServer(t, sock)
 	defer cleanup()
-	resetMPVRunningCache()
+	mpv.reset()
 
 	m := tea.Model(initialModel(nil))
 	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -72,11 +71,10 @@ func TestMPVTransportKeys(t *testing.T) {
 }
 
 func TestMPVTransportWithoutPlayerErrors(t *testing.T) {
-	resetMPVRunningCache()
-	customMPVSocket = filepath.Join(t.TempDir(), "absent.sock")
+	mpv.reset()
+	useTestSocket(t, filepath.Join(t.TempDir(), "absent.sock"))
 	defer func() {
-		customMPVSocket = isolatedTestSocket
-		resetMPVRunningCache()
+		mpv.reset()
 	}()
 
 	m := tea.Model(initialModel(nil))

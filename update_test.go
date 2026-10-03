@@ -851,13 +851,12 @@ func TestChannelAndQueuePaneFocus(t *testing.T) {
 }
 
 func TestEnterPlaysNowInMPV(t *testing.T) {
-	resetMPVRunningCache()
+	mpv.reset()
 	tmpDir := t.TempDir()
 	sock := filepath.Join(tmpDir, "test-mpv.sock")
-	customMPVSocket = sock
+	useTestSocket(t, sock)
 	defer func() {
-		customMPVSocket = isolatedTestSocket
-		resetMPVRunningCache()
+		mpv.reset()
 	}()
 
 	recv, cleanup := startMockMPVServer(t, sock)
@@ -878,8 +877,11 @@ func TestEnterPlaysNowInMPV(t *testing.T) {
 	if !strings.Contains(md.status, "Great Song") {
 		t.Fatalf("expected status to mention title, got %q", md.status)
 	}
-	if len(md.queue) != 1 || md.queue[0].ID != "v1" {
-		t.Fatalf("the playing video should replace the queue, got %v", md.queue)
+	if md.nowPlaying.ID != "v1" {
+		t.Fatalf("enter should set nowPlaying, got %q", md.nowPlaying.ID)
+	}
+	if md.queueActive {
+		t.Fatal("standalone playback should not activate the queue")
 	}
 
 	select {
@@ -893,13 +895,12 @@ func TestEnterPlaysNowInMPV(t *testing.T) {
 }
 
 func TestKeyAQueuesWithoutPlaying(t *testing.T) {
-	resetMPVRunningCache()
+	mpv.reset()
 	tmpDir := t.TempDir()
 	sock := filepath.Join(tmpDir, "test-mpv.sock")
-	customMPVSocket = sock
+	useTestSocket(t, sock)
 	defer func() {
-		customMPVSocket = isolatedTestSocket
-		resetMPVRunningCache()
+		mpv.reset()
 	}()
 
 	recv, cleanup := startMockMPVServer(t, sock)
@@ -1018,13 +1019,12 @@ func TestPromptArrowHistory(t *testing.T) {
 }
 
 func TestMPVActiveIndicatorInHeaderAndHints(t *testing.T) {
-	resetMPVRunningCache()
+	mpv.reset()
 	tmpDir := t.TempDir()
 	sock := filepath.Join(tmpDir, "test-mpv.sock")
-	customMPVSocket = sock
+	useTestSocket(t, sock)
 	defer func() {
-		customMPVSocket = isolatedTestSocket
-		resetMPVRunningCache()
+		mpv.reset()
 	}()
 
 	_, cleanup := startMockMPVServer(t, sock)

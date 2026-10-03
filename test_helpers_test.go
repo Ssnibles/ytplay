@@ -16,11 +16,18 @@ func TestMain(m *testing.M) {
 	tmpDir, err := os.MkdirTemp("", "ytplay-test-*")
 	if err == nil {
 		isolatedTestSocket = filepath.Join(tmpDir, "isolated-test.sock")
-		customMPVSocket = isolatedTestSocket
 		defer os.RemoveAll(tmpDir)
 	}
-	resetMPVRunningCache()
+	mpv = NewPlayer(isolatedTestSocket)
 	os.Exit(m.Run())
+}
+
+// useTestSocket points the package player at sock for the duration of the test.
+func useTestSocket(t *testing.T, sock string) {
+	t.Helper()
+	prev := mpv
+	mpv = NewPlayer(sock)
+	t.Cleanup(func() { mpv = prev })
 }
 
 var errTest = errors.New("boom")

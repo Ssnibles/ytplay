@@ -141,7 +141,7 @@ func startMockMPVServer(t *testing.T, sockPath string) (chan []string, func()) {
 	if err != nil {
 		t.Fatalf("failed to listen on socket %s: %v", sockPath, err)
 	}
-	received := make(chan []string, 10)
+	received := make(chan []string, 16)
 
 	go func() {
 		for {
@@ -158,22 +158,26 @@ func startMockMPVServer(t *testing.T, sockPath string) (chan []string, func()) {
 						Command   []interface{} `json:"command"`
 						RequestID int           `json:"request_id"`
 					}
-					if err := json.Unmarshal(line, &msg); err == nil {
-						cmdStrings := make([]string, len(msg.Command))
-						for idx, arg := range msg.Command {
-							cmdStrings[idx] = fmt.Sprint(arg)
-						}
-						received <- cmdStrings
-						if len(cmdStrings) >= 2 && cmdStrings[0] == "get_property" && cmdStrings[1] == "playlist-pos" {
-							_, _ = c.Write([]byte(fmt.Sprintf(`{"request_id":%d,"data":0,"error":"success"}`+"\n", msg.RequestID)))
-						} else if len(cmdStrings) >= 2 && cmdStrings[0] == "get_property" && cmdStrings[1] == "path" {
-							_, _ = c.Write([]byte(fmt.Sprintf(`{"request_id":%d,"data":"","error":"success"}`+"\n", msg.RequestID)))
-						} else {
-							// Simulate realistic mpv emitting asynchronous event before or between command responses
-							_, _ = c.Write([]byte(`{"event":"tracks-changed"}` + "\n"))
-							_, _ = c.Write([]byte(fmt.Sprintf(`{"request_id":%d,"error":"success"}`+"\n", msg.RequestID)))
-						}
+					if err := json.Unmarshal(line, &msg); err != nil {
+						continue
 					}
+					cmdStrings := make([]string, len(msg.Command))
+					for idx, arg := range msg.Command {
+						cmdStrings[idx] = fmt.Sprint(arg)
+					}
+					if len(cmdStrings) >= 2 && cmdStrings[0] == "get_property" {
+						// Queries are not interesting to record; answer playlist-pos.
+						data := "null"
+						if cmdStrings[1] == "playlist-pos" {
+							data = "0"
+						}
+						_, _ = c.Write([]byte(fmt.Sprintf(`{"request_id":%d,"data":%s,"error":"success"}`+"\n", msg.RequestID, data)))
+						continue
+					}
+					received <- cmdStrings
+					// Emit an async event before the reply to exercise event skipping.
+					_, _ = c.Write([]byte(`{"event":"tracks-changed"}` + "\n"))
+					_, _ = c.Write([]byte(fmt.Sprintf(`{"request_id":%d,"error":"success"}`+"\n", msg.RequestID)))
 				}
 			}(conn)
 		}
@@ -182,81 +186,65 @@ func startMockMPVServer(t *testing.T, sockPath string) (chan []string, func()) {
 	cleanup := func() {
 		_ = l.Close()
 		_ = os.Remove(sockPath)
-		resetMPVRunningCache()
+		mpv.reset()
 	}
 	return received, cleanup
 }
 
-func TestMPVIPC(t *testing.T) {
-	resetMPVRunningCache()
+// assertCommand reads the next recorded mpv command and checks it.
+func assertCommand(t *testing.T, recv chan []string, want ...string) {
+	t.Helper()
+	select {
+	case got := <-recv:
+		if len(got) != len(want) {
+			t.Fatalf("command = %v, want %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("command = %v, want %v", got, want)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for command %v", want)
+	}
+}
+
+func TestPlayerCommands(t *testing.T) {
 	tmpDir := t.TempDir()
 	sock := filepath.Join(tmpDir, "test-mpv.sock")
-	customMPVSocket = sock
-	defer func() {
-		customMPVSocket = isolatedTestSocket
-		resetMPVRunningCache()
-	}()
+	useTestSocket(t, sock)
 
-	// 1. When MPV is not running
-	if isMPVRunning() {
-		t.Fatal("isMPVRunning should return false when no mpv instance is listening")
+	if mpv.Running() {
+		t.Fatal("Running should be false with no listener")
 	}
 
-	// 2. Start mock MPV server
 	recv, cleanup := startMockMPVServer(t, sock)
 	defer cleanup()
-
-	// Wait briefly for server to bind
 	time.Sleep(20 * time.Millisecond)
-	resetMPVRunningCache()
+	mpv.reset()
 
-	if !isMPVRunning() {
-		t.Fatal("isMPVRunning should return true when mock mpv is listening")
+	if !mpv.Running() {
+		t.Fatal("Running should be true when the mock is listening")
 	}
 
-	// 3. Test enqueueToMPV with single URL
 	testURL := "https://www.youtube.com/watch?v=test1234"
-	if err := enqueueToMPV(testURL); err != nil {
-		t.Fatalf("enqueueToMPV failed: %v", err)
+	if err := mpv.Enqueue(testURL); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
 	}
+	assertCommand(t, recv, "loadfile", testURL, "append-play")
 
-	select {
-	case cmd := <-recv:
-		if len(cmd) != 3 || cmd[0] != "loadfile" || cmd[1] != testURL || cmd[2] != "append-play" {
-			t.Fatalf("unexpected mpv command received: %v", cmd)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for mpv command")
-	}
-
-	// 4. Test enqueueToMPV with multiple URLs (sequential queue handoff)
 	urlA := "https://www.youtube.com/watch?v=vidA"
 	urlB := "https://www.youtube.com/watch?v=vidB"
-	if err := enqueueToMPV(urlA, urlB); err != nil {
-		t.Fatalf("enqueueToMPV with multiple URLs failed: %v", err)
+	if err := mpv.Enqueue(urlA, urlB); err != nil {
+		t.Fatalf("Enqueue multiple failed: %v", err)
 	}
-	for _, expected := range []string{urlA, urlB} {
-		select {
-		case cmd := <-recv:
-			if len(cmd) != 3 || cmd[0] != "loadfile" || cmd[1] != expected || cmd[2] != "append-play" {
-				t.Fatalf("unexpected mpv command for multiple urls: %v, want url %s", cmd, expected)
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("timed out waiting for mpv command for %s", expected)
-		}
-	}
+	assertCommand(t, recv, "loadfile", urlA, "append-play")
+	assertCommand(t, recv, "loadfile", urlB, "append-play")
 
-	// 5. playNowInMPV replaces the running instance's playlist and plays the
-	// first URL immediately (loadfile without append).
-	if err := playNowInMPV(testURL); err != nil {
-		t.Fatalf("playNowInMPV failed: %v", err)
+	// Play replaces the playlist, then clears pause.
+	if err := mpv.Play(testURL); err != nil {
+		t.Fatalf("Play failed: %v", err)
 	}
-	select {
-	case cmd := <-recv:
-		if len(cmd) != 2 || cmd[0] != "loadfile" || cmd[1] != testURL {
-			t.Fatalf("unexpected mpv command received from playNowInMPV: %v", cmd)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for mpv command from playNowInMPV")
-	}
+	assertCommand(t, recv, "loadfile", testURL)
+	assertCommand(t, recv, "set", "pause", "no")
 }

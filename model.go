@@ -64,8 +64,10 @@ type model struct {
 	history             []string // past queries, oldest first
 	histIdx             int      // -1 = editing fresh text, else index into history
 	pending             string   // typed text saved when entering history navigation
-	queue               []video  // videos staged for sequential playback
+	queue               []video  // videos staged for playback
 	queueCursor         int      // selected row on the queue page
+	queueActive         bool     // mpv's playlist is currently this queue
+	nowPlaying          video    // the video mpv is playing (zero if none)
 	channelTitle        string   // active channel name
 	channelURL          string   // active channel videos endpoint or URL
 	channelVideos       []video  // videos for active channel
@@ -256,7 +258,7 @@ func mpvTickCmd() tea.Cmd {
 }
 
 func (m model) startMPVTick() (model, tea.Cmd) {
-	if m.mpvTicking || !isMPVRunning() {
+	if m.mpvTicking {
 		return m, nil
 	}
 	m.mpvTicking = true

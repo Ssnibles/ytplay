@@ -278,7 +278,7 @@ func (m model) viewQueue() string {
 		{fmt.Sprintf("Queue · %s", plural(len(m.queue), "video")), barCtxStyle},
 	}
 	ctxRight := []barPart{}
-	if isMPVRunning() {
+	if mpv.Running() {
 		ctxRight = append(ctxRight, barPart{"● mpv active", barMpvStyle})
 	}
 
@@ -300,7 +300,7 @@ func (m model) pageStateParts(count int, noun string) []barPart {
 	if len(m.queue) > 0 {
 		parts = append(parts, barPart{"  ·  ", barSepStyle}, barPart{fmt.Sprintf("%d queued", len(m.queue)), barAccentStyle})
 	}
-	if isMPVRunning() {
+	if mpv.Running() {
 		parts = append(parts, barPart{"  ·  ", barSepStyle}, barPart{"● mpv active", barMpvStyle})
 	}
 	return parts
@@ -345,8 +345,8 @@ func (m model) viewList(l layout, videos []video, cursor int) string {
 	numW := max(len(strconv.Itoa(len(videos))), 2)
 
 	playingID := ""
-	if isMPVRunning() && len(m.queue) > 0 {
-		playingID = m.queue[0].ID
+	if mpv.Running() {
+		playingID = m.nowPlaying.ID
 	}
 
 	start := 0
