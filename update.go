@@ -99,15 +99,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case mpvTickMsg:
 		if mpv.Running() {
-			oldLen := len(m.queue)
 			m = m.syncPlayer()
-			var cmd tea.Cmd
-			if m.state == queueState && len(m.queue) > 0 && len(m.queue) != oldLen {
-				cmd = m.loadSelectionFor(m.queue, m.queueCursor)
-			}
-			cmds = append(cmds, cmd, mpvTickCmd())
+			cmds = append(cmds, mpvTickCmd())
 		} else {
+			// The player is gone; the playback session is over.
 			m.mpvTicking = false
+			m.queueActive = false
 		}
 	}
 

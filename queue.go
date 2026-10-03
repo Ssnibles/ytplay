@@ -38,45 +38,21 @@ func (m model) playStandalone(v video) model {
 	return m
 }
 
-// syncPlayer reconciles ytplay's queue with mpv.
-//
-// While the queue is the active playlist, mpv's playlist position is exactly
-// the queue index, so everything before it is finished: drop those entries from
-// both mpv and the queue. When the queue is not active (a standalone video is
-// playing) the staged queue is left completely alone. There is deliberately no
-// URL or position guessing — divergence is handled by only trusting the
-// position we ourselves established.
+// syncPlayer tracks which queue entry mpv is playing. The queue is a playlist:
+// playing it never removes entries, so the user keeps the list they built. Only
+// explicit removal (`x` / `X`) changes it. While the queue is the active
+// playlist, mpv's position is the queue index, so no guessing is needed.
 func (m model) syncPlayer() model {
-	if !mpv.Running() {
-		return m
-	}
-	if !m.queueActive || len(m.queue) == 0 {
+	if !mpv.Running() || !m.queueActive || len(m.queue) == 0 {
 		return m
 	}
 	pos := mpv.PlaylistPos()
-	if pos < 0 {
-		return m
-	}
-	if pos > len(m.queue) {
-		pos = len(m.queue)
-	}
-	if pos > 0 {
-		for i := 0; i < pos; i++ {
-			_ = mpv.RemoveAt(0)
-		}
-		m.queue = m.queue[pos:]
-		m.queueCursor -= pos
-		if m.queueCursor < 0 {
-			m.queueCursor = 0
-		}
-		if m.queueCursor >= len(m.queue) && len(m.queue) > 0 {
-			m.queueCursor = len(m.queue) - 1
-		}
-	}
-	if len(m.queue) > 0 {
-		m.nowPlaying = m.queue[0]
-	} else {
+	switch {
+	case pos >= len(m.queue):
+		// Played past the end of the queue.
 		m.queueActive = false
+	case pos >= 0:
+		m.nowPlaying = m.queue[pos]
 	}
 	return m
 }
@@ -168,25 +144,23 @@ func (m model) clearQueue() model {
 	return m
 }
 
-// playFromQueue plays the selected queued video and everything after it.
+// playFromQueue plays the queue starting at the selection, keeping the whole
+// queue intact so the user can still see and re-play the earlier entries.
 func (m model) playFromQueue() model {
 	if len(m.queue) == 0 {
 		return m
 	}
-	remaining := m.queue[m.queueCursor:]
-	urls := queueURLs(remaining)
-	if err := mpv.Play(urls...); err != nil {
+	start := m.queueCursor
+	if err := mpv.PlayFrom(start, queueURLs(m.queue)...); err != nil {
 		m.status = ""
 		m.errMsg = err.Error()
 		return m
 	}
-	m.queue = remaining
-	m.queueCursor = 0
 	m.queueActive = true
-	m.nowPlaying = m.queue[0]
+	m.nowPlaying = m.queue[start]
 	m.errMsg = ""
-	if len(urls) > 1 {
-		m.status = fmt.Sprintf("playing %q + %d more in mpv", m.nowPlaying.Title, len(urls)-1)
+	if remaining := len(m.queue) - start - 1; remaining > 0 {
+		m.status = fmt.Sprintf("playing %q + %d more in mpv", m.nowPlaying.Title, remaining)
 	} else {
 		m.status = fmt.Sprintf("playing %q", m.nowPlaying.Title)
 	}

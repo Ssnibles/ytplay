@@ -207,7 +207,7 @@ func TestPlayQueueActivatesAndPlaysInOrder(t *testing.T) {
 	assertCommand(t, recv, "set", "pause", "no")
 }
 
-func TestPlayFromQueueTrimsAndActivates(t *testing.T) {
+func TestPlayFromQueueKeepsQueue(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "test-mpv.sock")
 	useTestSocket(t, sock)
 	recv, cleanup := startMockMPVServer(t, sock)
@@ -224,16 +224,20 @@ func TestPlayFromQueueTrimsAndActivates(t *testing.T) {
 		queueCursor: 1,
 	}
 	m = m.playFromQueue()
-	if ids(m.queue) != "v1v2" || m.queueCursor != 0 || !m.queueActive || m.nowPlaying.ID != "v1" {
-		t.Fatalf("playFromQueue state wrong: queue=%v cursor=%d active=%v now=%q",
-			ids(m.queue), m.queueCursor, m.queueActive, m.nowPlaying.ID)
+	if ids(m.queue) != "v0v1v2" || m.queueCursor != 1 {
+		t.Fatalf("playing from the queue must not drop earlier entries: queue=%v cursor=%d", ids(m.queue), m.queueCursor)
 	}
-	assertCommand(t, recv, "loadfile", "https://youtu.be/v1")
+	if !m.queueActive || m.nowPlaying.ID != "v1" {
+		t.Fatalf("playFromQueue state wrong: active=%v now=%q", m.queueActive, m.nowPlaying.ID)
+	}
+	assertCommand(t, recv, "loadfile", "https://youtu.be/v0")
+	assertCommand(t, recv, "loadfile", "https://youtu.be/v1", "append")
 	assertCommand(t, recv, "loadfile", "https://youtu.be/v2", "append")
 	assertCommand(t, recv, "set", "pause", "no")
+	assertCommand(t, recv, "playlist-play-index", "1")
 }
 
-func TestSyncPlayerAdvancesActiveQueue(t *testing.T) {
+func TestSyncPlayerTracksCurrentEntry(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "test-mpv.sock")
 	useTestSocket(t, sock)
 	recv := startMockMPVPos(t, sock, 2)
@@ -248,21 +252,23 @@ func TestSyncPlayerAdvancesActiveQueue(t *testing.T) {
 			{ID: "v2", URL: "https://youtu.be/v2"},
 			{ID: "v3", URL: "https://youtu.be/v3"},
 		},
-		queueCursor: 3,
 	}
 	m = m.syncPlayer()
 
-	if ids(m.queue) != "v2v3" {
-		t.Fatalf("finished entries should be dropped, got %v", ids(m.queue))
+	if ids(m.queue) != "v0v1v2v3" {
+		t.Fatalf("the queue must not be consumed by playback, got %v", ids(m.queue))
 	}
 	if m.nowPlaying.ID != "v2" {
-		t.Fatalf("nowPlaying should be the current entry, got %q", m.nowPlaying.ID)
+		t.Fatalf("nowPlaying should track mpv's position, got %q", m.nowPlaying.ID)
 	}
-	if m.queueCursor != 1 {
-		t.Fatalf("cursor should follow the drop, got %d", m.queueCursor)
+	if !m.queueActive {
+		t.Fatal("queue should still be active")
 	}
-	assertCommand(t, recv, "playlist-remove", "0")
-	assertCommand(t, recv, "playlist-remove", "0")
+	select {
+	case cmd := <-recv:
+		t.Fatalf("sync must not touch the playlist, got %v", cmd)
+	case <-time.After(50 * time.Millisecond):
+	}
 }
 
 func TestSyncPlayerLeavesStagedQueueAlone(t *testing.T) {
@@ -290,7 +296,7 @@ func TestSyncPlayerLeavesStagedQueueAlone(t *testing.T) {
 	}
 }
 
-func TestSyncPlayerIgnoresNoPlaylist(t *testing.T) {
+func TestSyncPlayerKeepsQueueWhenIdle(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "test-mpv.sock")
 	useTestSocket(t, sock)
 	startMockMPVPos(t, sock, -1)
@@ -300,6 +306,9 @@ func TestSyncPlayerIgnoresNoPlaylist(t *testing.T) {
 	m := model{queueActive: true, queue: []video{{ID: "v0", URL: "https://youtu.be/v0"}}}
 	m = m.syncPlayer()
 	if ids(m.queue) != "v0" {
-		t.Fatalf("a -1 position must not drop anything, got %v", ids(m.queue))
+		t.Fatalf("an idle player must not change the queue, got %v", ids(m.queue))
+	}
+	if !m.queueActive {
+		t.Fatal("a transient -1 position must not deactivate the queue")
 	}
 }
