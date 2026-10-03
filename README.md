@@ -26,7 +26,7 @@ TUI YouTube search & play built with [Bubble Tea](https://github.com/charmbracel
 - Infinite paging: keep scrolling near the bottom to fetch more results
 - Playback: `Enter` plays the selected video immediately (replacing whatever mpv is doing); a new detached mpv is spawned if none is running, and the header shows `● mpv active`
 - Playback transport over mpv IPC: `space` pause/play, `n`/`b` skip forward/back, `+`/`-` volume, `m` mute
-- Play queue: `a` stages videos without touching mpv, `q` opens a queue page to reorder (`K`/`J`), remove (`x`), clear (`X`), or play (`Enter` from the selection, `p` for all)
+- Play queue: `a` stages videos without touching mpv, `q` opens a queue page to reorder (`K`/`J`), remove (`x`), clear (`X`), or play (`Enter` starts at the selection, `p` from the top). The queue is a playlist — playback moves a current-track marker and never removes entries.
 - Channel browsing: browse a channel's videos in a two-pane list with thumbnails and stats (`Enter` on a channel result, `C` or `Tab` + `Enter` on a video, `O` opens channel in browser)
 - Search history: past queries are persisted and recalled with `Ctrl+P` / `Ctrl+N` or `↑` / `↓`
 - `c` copies the selected video's URL (native clipboard, with an OSC52 terminal fallback over SSH), `o` opens the video directly in your browser, `O` opens the channel

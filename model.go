@@ -66,7 +66,8 @@ type model struct {
 	pending             string   // typed text saved when entering history navigation
 	queue               []video  // videos staged for playback
 	queueCursor         int      // selected row on the queue page
-	queueActive         bool     // mpv's playlist is currently this queue
+	queueActive         bool     // mpv's playlist is currently the queue suffix
+	queueOffset         int      // queue index that mpv's playlist position 0 maps to
 	nowPlaying          video    // the video mpv is playing (zero if none)
 	channelTitle        string   // active channel name
 	channelURL          string   // active channel videos endpoint or URL

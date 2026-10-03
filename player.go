@@ -164,17 +164,6 @@ func (p *Player) Play(urls ...string) error {
 	return nil
 }
 
-// PlayFrom replaces the playlist with urls and starts at the given index.
-func (p *Player) PlayFrom(start int, urls ...string) error {
-	if err := p.Play(urls...); err != nil {
-		return err
-	}
-	if start > 0 {
-		return p.command("playlist-play-index", start)
-	}
-	return nil
-}
-
 func (p *Player) replace(urls []string) error {
 	if err := p.command("loadfile", urls[0]); err != nil {
 		return err

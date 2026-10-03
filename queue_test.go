@@ -227,14 +227,33 @@ func TestPlayFromQueueKeepsQueue(t *testing.T) {
 	if ids(m.queue) != "v0v1v2" || m.queueCursor != 1 {
 		t.Fatalf("playing from the queue must not drop earlier entries: queue=%v cursor=%d", ids(m.queue), m.queueCursor)
 	}
-	if !m.queueActive || m.nowPlaying.ID != "v1" {
-		t.Fatalf("playFromQueue state wrong: active=%v now=%q", m.queueActive, m.nowPlaying.ID)
+	if !m.queueActive || m.nowPlaying.ID != "v1" || m.queueOffset != 1 {
+		t.Fatalf("playFromQueue state wrong: active=%v now=%q offset=%d", m.queueActive, m.nowPlaying.ID, m.queueOffset)
 	}
-	assertCommand(t, recv, "loadfile", "https://youtu.be/v0")
-	assertCommand(t, recv, "loadfile", "https://youtu.be/v1", "append")
+	// Only the suffix is loaded, so the selected entry plays first with no jump.
+	assertCommand(t, recv, "loadfile", "https://youtu.be/v1")
 	assertCommand(t, recv, "loadfile", "https://youtu.be/v2", "append")
 	assertCommand(t, recv, "set", "pause", "no")
-	assertCommand(t, recv, "playlist-play-index", "1")
+}
+
+func TestSyncPlayerMapsOffsetOntoQueue(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "test-mpv.sock")
+	useTestSocket(t, sock)
+	startMockMPVPos(t, sock, 1)
+	time.Sleep(20 * time.Millisecond)
+	mpv.reset()
+
+	m := model{
+		queueActive: true,
+		queueOffset: 2,
+		queue: []video{
+			{ID: "v0"}, {ID: "v1"}, {ID: "v2"}, {ID: "v3"}, {ID: "v4"},
+		},
+	}
+	m = m.syncPlayer()
+	if m.nowPlaying.ID != "v3" {
+		t.Fatalf("offset+pos should map to queue index 3, got %q", m.nowPlaying.ID)
+	}
 }
 
 func TestSyncPlayerTracksCurrentEntry(t *testing.T) {
