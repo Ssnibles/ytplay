@@ -199,6 +199,45 @@ func (m model) isQueued(id string) bool {
 	return false
 }
 
+// currentVideo returns the video selected on the active page, if any. It is
+// used to protect the visible entry from cache eviction.
+func (m model) currentVideo() (video, bool) {
+	switch m.state {
+	case resultsState:
+		if len(m.filtered) > 0 && m.cursor >= 0 && m.cursor < len(m.filtered) {
+			return m.filtered[m.cursor], true
+		}
+	case channelState:
+		if len(m.channelVideos) > 0 && m.channelCursor >= 0 && m.channelCursor < len(m.channelVideos) {
+			return m.channelVideos[m.channelCursor], true
+		}
+	case queueState:
+		if len(m.queue) > 0 && m.queueCursor >= 0 && m.queueCursor < len(m.queue) {
+			return m.queue[m.queueCursor], true
+		}
+	}
+	return video{}, false
+}
+
+func (m model) currentVideoID() string {
+	if v, ok := m.currentVideo(); ok {
+		return v.ID
+	}
+	return ""
+}
+
+// currentThumbKey is the cache key of the block the preview is showing right
+// now, at the current terminal size.
+func (m model) currentThumbKey() string {
+	v, ok := m.currentVideo()
+	if !ok {
+		return ""
+	}
+	l := computeLayout(m.width, m.height)
+	cols, rows := previewThumbDims(v, l)
+	return thumbKey(v.ID, cols, rows)
+}
+
 func (m model) removeQueueByID(id string) model {
 	for i, v := range m.queue {
 		if v.ID == id {

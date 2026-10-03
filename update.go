@@ -745,8 +745,15 @@ func (m model) handleSearchMsg(msg searchMsg) (model, tea.Cmd) {
 func (m model) handleThumbMsg(msg thumbMsg) model {
 	key := thumbKey(msg.id, msg.cols, msg.rows)
 	m.thumbBusy[key] = false
-	if len(m.thumbs)+1 > maxThumbs {
+	if len(m.thumbs) >= maxThumbs {
+		// Never evict the block the preview is currently showing: eviction
+		// isn't a selection change, so nothing would re-fetch it and the
+		// preview would be stuck on "loading thumbnail…".
+		protect := m.currentThumbKey()
 		for k := range m.thumbs {
+			if k == protect {
+				continue
+			}
 			delete(m.thumbs, k)
 			delete(m.thumbBusy, k)
 			break
@@ -764,8 +771,12 @@ func (m model) handleThumbMsg(msg thumbMsg) model {
 
 func (m model) handleDetailMsg(msg detailMsg) model {
 	m.detailBusy[msg.id] = false
-	if len(m.details)+1 > maxDetails {
+	if len(m.details) >= maxDetails {
+		protect := m.currentVideoID()
 		for id := range m.details {
+			if id == protect {
+				continue
+			}
 			delete(m.details, id)
 			delete(m.detailBusy, id)
 			break
